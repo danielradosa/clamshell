@@ -110,7 +110,13 @@ trust, it signs nothing but this app, and `make remove-certificate` deletes it.
 make diagnose
 ```
 
-That launches the app in a mode that reports what it can actually see — whether
+The app also keeps a running trace at `~/Library/Logs/Clamshell-trace.log`,
+recording state changes, overlay lifecycle, sleep and wake, and each opening
+animation with timings. It is written to a file rather than stderr precisely
+because the interesting events happen either side of a lid close, where a
+terminal capture is lost.
+
+`make diagnose` launches the app in a mode that reports what it can actually see — whether
 ScreenCaptureKit will hand over a display, which is the authoritative test, plus
 the lid sensor state and current angle. The report is also written to
 `~/Library/Logs/Clamshell-diagnostics.txt`.
@@ -173,6 +179,19 @@ quintic is still under 0.1 at 25°, which is why it is not the default.
 
 The 16% only applies for the second or two the lid is actually moving.
 Reproduce the frame time with `make preview`.
+
+**Opening.** The unfold is played on its own clock rather than tracked from the
+hinge. A lid is thrown open in a couple of tenths of a second, and the panel does
+not light up until it is already past about 15°, so a sensor-following unfold has
+almost no visible travel left and reads as a blink rather than an animation. The
+animation runs for 0.75s by default, adjustable in Settings, and eases onto
+whatever angle the lid actually ends up at — so opening it halfway settles at the
+right amount of fold instead of unfolding flat and snapping back.
+
+It starts on a wake notification, and also on simply seeing the angle come back
+up from shut. Whether a lid close sleeps the whole Mac, only the panel, or
+nothing at all depends on power assertions and attached displays, and the
+matching notification does not always arrive; the angle always does.
 
 **Power.** The capture stream is not left running. It starts when the lid drops
 near the engage angle *or* when the lid starts moving downward faster than 15°/s

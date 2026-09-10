@@ -67,6 +67,22 @@ final class FoldController {
     private let engageFold: Double = 0.004
     private let clearFold: Double = 0.0004
 
+    /// How long the opening animation runs, in seconds.
+    ///
+    /// The unfold cannot simply track the hinge. A lid is thrown open in a
+    /// couple of tenths of a second and the panel does not light up until it is
+    /// already past fifteen degrees, so a sensor-following unfold has perhaps
+    /// two tenths of visible travel left — which reads as a blink, not an
+    /// animation. So the opening is played on its own clock, and eased back onto
+    /// the real angle by the end.
+    private var unfoldDuration: TimeInterval { settings.unfoldDuration }
+
+    private var unfoldStart: Date?
+    private var unfoldFrom: Double = 1
+
+    /// Previous tick's angle, used to notice the lid coming back up.
+    private var lastSeenAngle: Double = AngleSource.restingAngle
+
     /// Set when the user pauses from the menu bar or with Escape.
     var isPaused = false { didSet { if isPaused { teardown() } else { angleSource.reset() } } }
 
@@ -203,14 +219,22 @@ final class FoldController {
         angleSource.reset()
         scheduleWatch(interval: 1.0 / 120.0)
 
-        let fold = FoldCurve.progress(angle: angleSource.angle, engageAngle: settings.engageAngle)
-        trace("wake: angle \(String(format: "%.1f", angleSource.angle)) fold \(String(format: "%.3f", fold)) snapshot \(snapshot != nil)")
-        if fold > engageFold, snapshot != nil {
-            state = .active
-            showOverlay()
-        } else {
+        let sensorFold = FoldCurve.progress(
+            angle: angleSource.angle, engageAngle: settings.engageAngle
+        )
+        trace(String(format: "wake: angle %.1f fold %.3f snapshot %@",
+                     angleSource.angle, sensorFold, snapshot != nil ? "yes" : "no"))
+
+        guard snapshot != nil else {
             state = .armed
+            return
         }
+        // Play the opening animation regardless of where the lid has already
+        // got to. By the time the panel lights up the lid is usually most of
+        // the way open, so gating this on the sensor would skip it entirely.
+        beginUnfold(from: sensorFold)
+        state = .active
+        showOverlay()
     }
 
     // MARK: - The watch loop
@@ -240,10 +264,27 @@ final class FoldController {
 
         let angle = angleSource.angle
         let engage = settings.engageAngle
-        let fold = FoldCurve.progress(angle: angle, engageAngle: engage)
+        let fold = currentFold()
         previewFold = fold
 
         let closingFast = angleSource.closingVelocity > armVelocity
+
+        // Belt and braces for the opening animation. Whether the lid close put
+        // the whole Mac to sleep, only the panel, or nothing at all, depends on
+        // power assertions and external displays — and the matching wake
+        // notification does not always arrive. Seeing the angle itself come back
+        // up from shut is the one signal that is always there.
+        let wasShut = lastSeenAngle < FoldCurve.closedAngle + 8
+        let isOpening = angle > FoldCurve.closedAngle + 8
+        if wasShut, isOpening, unfoldStart == nil, snapshot != nil,
+           !isPaused, settings.enabled, !ScreenLock.isLocked {
+            trace(String(format: "lid opening observed (%.1f -> %.1f), starting unfold",
+                         lastSeenAngle, angle))
+            beginUnfold(from: 1)
+            if state != .active { transition(to: .active) }
+        }
+        lastSeenAngle = angle
+        _ = angleSource.consumeTeleport()
 
         switch state {
         case .idle:
@@ -255,21 +296,41 @@ final class FoldController {
                 transition(to: .active)
             }
         case .active:
-            if fold < clearFold { transition(to: .armed) }
+            // Never end the state mid-animation; the unfold owns the fold value
+            // until it finishes.
+            if fold < clearFold, unfoldStart == nil { transition(to: .armed) }
         }
 
         trackClearSound(fold: fold)
     }
 
-    /// Set by CLAMSHELL_TRACE=1. Prints state changes and overlay lifecycle to
-    /// stderr, which is the only way to confirm the overlay is no longer being
-    /// rebuilt on every engagement without watching the screen.
-    private static let isTracing = ProcessInfo.processInfo.environment["CLAMSHELL_TRACE"] == "1"
+    /// Appends to ~/Library/Logs/Clamshell-trace.log.
+    ///
+    /// Always on, and always to a file. An earlier version wrote to stderr,
+    /// which is useless for this app: the interesting events happen either side
+    /// of a sleep, and asking someone to keep a terminal capturing across a lid
+    /// close loses the output at exactly the moment it matters.
+    private static let traceURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Logs/Clamshell-trace.log")
+
+    private static let traceStart = Date()
 
     private func trace(_ message: String) {
-        guard Self.isTracing else { return }
-        FileHandle.standardError.write(Data("[clamshell] \(message)\n".utf8))
+        let stamp = String(format: "%7.3f", Date().timeIntervalSince(Self.traceStart))
+        let line = "[\(stamp)] \(message)\n"
+        if Self.isTracingToStderr { FileHandle.standardError.write(Data(line.utf8)) }
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: Self.traceURL) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: Self.traceURL)
+        }
     }
+
+    private static let isTracingToStderr =
+        ProcessInfo.processInfo.environment["CLAMSHELL_TRACE"] == "1"
 
     private func transition(to next: State) {
         guard next != state else { return }
@@ -297,6 +358,36 @@ final class FoldController {
 
     /// Anything at all to render — a live frame, or the pre-sleep snapshot.
     private var hasSomethingToDraw: Bool { latestFrame != nil || snapshot != nil }
+
+    /// Fold progress, with the opening animation blended in when one is running.
+    ///
+    /// The blend eases from wherever the fold was when the lid opened onto
+    /// whatever the sensor currently says, so a lid opened only halfway settles
+    /// at the right amount of fold instead of unfolding flat and snapping back.
+    private func currentFold() -> Double {
+        let sensorFold = FoldCurve.progress(
+            angle: angleSource.angle, engageAngle: settings.engageAngle
+        )
+        guard let start = unfoldStart else { return sensorFold }
+
+        let elapsed = Date().timeIntervalSince(start)
+        guard elapsed < unfoldDuration else {
+            unfoldStart = nil
+            return sensorFold
+        }
+
+        // Ease out: moves off quickly, then settles. A lid springs open and
+        // comes to rest; it does not glide at a constant rate.
+        let progress = elapsed / unfoldDuration
+        let eased = 1 - pow(1 - progress, 3)
+        return unfoldFrom + (sensorFold - unfoldFrom) * eased
+    }
+
+    private func beginUnfold(from fold: Double) {
+        unfoldFrom = max(fold, 0.85)
+        unfoldStart = Date()
+        trace(String(format: "unfold started from %.3f over %.2fs", unfoldFrom, unfoldDuration))
+    }
 
     private func startCapture() {
         guard isCaptureAllowed else { return }
@@ -370,7 +461,7 @@ final class FoldController {
         // Prefer a live frame; fall back to the snapshot, which is what carries
         // the unfold immediately after a wake.
         guard let source = latestFrame?.texture ?? snapshot else { return }
-        let fold = FoldCurve.progress(angle: angleSource.angle, engageAngle: settings.engageAngle)
+        let fold = currentFold()
         guard let drawable = layer.nextDrawable() else { return }
         renderer.render(source: source, fold: fold, style: settings.style, drawable: drawable)
 

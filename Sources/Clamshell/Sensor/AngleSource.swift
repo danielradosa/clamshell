@@ -29,6 +29,19 @@ final class AngleSource {
     /// the fallback whenever a read fails.
     static let restingAngle: Double = 100
 
+    /// A single-tick change beyond this is treated as a discontinuity rather
+    /// than motion.
+    private static let teleportThreshold: Double = 25
+
+    /// True for one read after the angle jumped discontinuously. The controller
+    /// uses this to notice a wake even when no wake notification arrives.
+    private(set) var didTeleport = false
+
+    func consumeTeleport() -> Bool {
+        defer { didTeleport = false }
+        return didTeleport
+    }
+
     var mode: Mode = .sensor
 
     /// True when this Mac exposes a usable lid angle sensor.
@@ -60,6 +73,19 @@ final class AngleSource {
         lastTick = now
 
         let target = currentTarget(dt: dt)
+
+        // A jump this large in one tick is not a hinge moving, it is time having
+        // passed while the process was suspended — a sleep, or a stalled run
+        // loop. Springing across it would play a fold nobody performed.
+        if abs(target - rawAngle) > Self.teleportThreshold {
+            rawAngle = target
+            springPosition = target
+            springVelocity = 0
+            closingVelocity = 0
+            didTeleport = true
+            return
+        }
+
         // Smooth the derivative too: a 1-degree quantisation step across a short
         // frame would otherwise read as a huge instantaneous velocity.
         let instantaneous = (rawAngle - target) / dt

@@ -12,7 +12,7 @@ struct SettingsView: View {
             controls
         }
         .padding(24)
-        .frame(width: 620, height: 440)
+        .frame(width: 640, height: 520)
         .onAppear { model.beginPreview() }
         .onDisappear { model.endPreview() }
     }
@@ -92,6 +92,21 @@ struct SettingsView: View {
                 Text("Open the lid past this angle and the effect gets out of the way.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Opening animation").font(.callout)
+                    Spacer()
+                    Text(String(format: "%.2fs", settings.unfoldDuration))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $settings.unfoldDuration, in: 0.3...1.5)
+                Text("A lid is opened faster than the screen can switch on, so the unfold plays on its own clock.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Toggle("Click when the effect clears", isOn: $settings.soundEnabled)

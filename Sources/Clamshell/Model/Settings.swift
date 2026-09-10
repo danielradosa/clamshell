@@ -19,6 +19,7 @@ final class Settings: ObservableObject {
         static let blurScale = "blurScale"
         static let shadowScale = "shadowScale"
         static let soundEnabled = "soundEnabled"
+        static let unfoldDuration = "unfoldDuration"
     }
 
     /// Master on/off for the effect.
@@ -37,6 +38,13 @@ final class Settings: ObservableObject {
 
     /// Play a soft click when the lid opens far enough to clear the effect.
     @Published var soundEnabled: Bool { didSet { defaults.set(soundEnabled, forKey: Key.soundEnabled) } }
+
+    /// Seconds the opening animation runs for.
+    ///
+    /// The unfold is played on its own clock rather than tracked from the hinge,
+    /// because a lid is opened far faster than the panel can light up. This is
+    /// how long that animation lasts.
+    @Published var unfoldDuration: Double { didSet { defaults.set(unfoldDuration, forKey: Key.unfoldDuration) } }
 
     /// The active preset with the user's multipliers already applied.
     var style: FoldStyle {
@@ -58,6 +66,7 @@ final class Settings: ObservableObject {
             Key.blurScale: 1.0,
             Key.shadowScale: 1.0,
             Key.soundEnabled: true,
+            Key.unfoldDuration: 0.75,
         ])
         enabled = defaults.bool(forKey: Key.enabled)
         styleID = defaults.string(forKey: Key.styleID) ?? FoldStyle.satin.id
@@ -66,5 +75,6 @@ final class Settings: ObservableObject {
         blurScale = defaults.double(forKey: Key.blurScale)
         shadowScale = defaults.double(forKey: Key.shadowScale)
         soundEnabled = defaults.bool(forKey: Key.soundEnabled)
+        unfoldDuration = defaults.double(forKey: Key.unfoldDuration)
     }
 }
