@@ -86,15 +86,27 @@ make CODESIGN_IDENTITY="Your Certificate Name"
 ## How it works
 
 **Reading the hinge.** macOS exposes the lid angle as an undocumented HID device
-on the Sensor usage page (`0x20`), usage `0x8A`, named `las`. Feature report 1
-returns three bytes: a report ID followed by a little-endian `UInt16` holding the
-angle in whole degrees. Opening the device succeeds for an ordinary unprivileged
-process, even though opening the whole HID manager does not. Reads cost about
-half a millisecond, so polling at display rate is comfortable.
+on the Sensor usage page (`0x20`), usage `0x8A`, named `las`. Opening the device
+succeeds for an ordinary unprivileged process, even though opening the whole HID
+manager does not. A read costs about half a millisecond, so polling at display
+rate is comfortable.
 
-**Smoothing.** The sensor quantises to whole degrees, which steps visibly if fed
-straight to the renderer. A critically damped spring smooths it without the
-overshoot a plain spring adds or the lag a moving average adds.
+The device answers two reports that both carry the angle, as a little-endian
+`UInt16` at bytes 1–2:
+
+| Report | Units | Measured on an M2 Air |
+| --- | --- | --- |
+| 7 | hundredths of a degree | 112.59 – 112.72 |
+| 1 | whole degrees, 9-bit field | a flat 113 |
+
+Clamshell prefers report 7 and falls back to report 1. Most published
+implementations use only report 1; the extra two decimal places matter here
+because the hinge angle *is* the animation, and whole-degree steps are visible in
+the fold.
+
+**Smoothing.** Even at 0.01°, the reading jitters by a few hundredths. A
+critically damped spring smooths it without the overshoot a plain spring adds or
+the lag a moving average adds.
 
 **Capture.** ScreenCaptureKit streams the display, with this application excluded
 from its own capture — otherwise the overlay would be captured, rendered, and
@@ -106,6 +118,11 @@ perspective divide; because depth is zero at the hinge, the hinge stays pinned
 exactly as a real lid does. The fragment shader mixes between the sharp texture
 and a separably blurred half-resolution copy, with the mix weighted by depth so
 the receding edge falls out of focus first.
+
+**Speed.** One frame at 3420×2224 — the backing store the window server actually
+renders the M2 Air's panel from — takes 1.31 ms in the heaviest style. That is a
+764 fps ceiling, against a 16.67 ms budget at 60 Hz. Reproduce it with
+`make preview`.
 
 **Power.** The capture stream is not left running. It starts when the lid drops
 near the engage angle *or* when the lid starts moving downward faster than 15°/s
@@ -121,6 +138,18 @@ times a second and does nothing else.
 | **Depth / Blur / Shadow** | Multipliers on the active style, so switching presets keeps your tuning |
 | **Clears above** | Hinge angle at which the effect gets out of the way |
 | **Drag to preview** | Scrub an angle by hand, to judge a style at an angle you cannot hold |
+
+**Pause** and **Preview Effect** are in the menu bar. Escape also pauses, but only
+while the fold is actually on screen — a globally registered Escape would be
+swallowed from every other app, so it is armed for the second or two the effect
+is visible and torn down immediately after. It needs no Accessibility permission,
+because it goes through Carbon's `RegisterEventHotKey` rather than an `NSEvent`
+global monitor. Registration is verified on macOS 27 with Accessibility denied;
+delivery has not been verified on this machine, since testing it would require
+synthesising a keypress, which needs the very permission being avoided.
+
+On a Mac with no lid sensor the effect stays dormant rather than looping — use
+**Preview Effect**, or open Settings and scrub the angle slider.
 
 The feel of the effect lives in one function: `FoldCurve.ease` in
 [`Sources/Clamshell/Model/FoldCurve.swift`](Sources/Clamshell/Model/FoldCurve.swift).

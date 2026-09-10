@@ -14,7 +14,7 @@ final class SettingsModel: ObservableObject {
     @Published var previewFold: Double = 0
     @Published var liveAngle: Double = 0
 
-    @Published var isScrubbing = false {
+    @Published var isScrubbing: Bool {
         didSet { applyMode() }
     }
 
@@ -29,6 +29,9 @@ final class SettingsModel: ObservableObject {
 
     init(controller: FoldController?) {
         self.controller = controller
+        // Without a sensor there is nothing live to watch, so start in the mode
+        // that actually shows something.
+        self.isScrubbing = (controller?.hasSensor ?? false) == false
     }
 
     func beginPreview() {
@@ -44,7 +47,8 @@ final class SettingsModel: ObservableObject {
         ticker?.invalidate()
         ticker = nil
         isScrubbing = false
-        controller?.setMode(controller?.hasSensor == true ? .sensor : .demo)
+        controller?.setMode(controller?.hasSensor == true
+                            ? .sensor : .manual(AngleSource.restingAngle))
     }
 
     private func sample() {
@@ -60,7 +64,10 @@ final class SettingsModel: ObservableObject {
         if isScrubbing {
             controller.setMode(.manual(scrubAngle))
         } else {
-            controller.setMode(controller.hasSensor ? .sensor : .demo)
+            // Never the looping demo: Settings opening on a sensorless Mac must
+            // not start throwing a fullscreen overlay up on a timer.
+            controller.setMode(controller.hasSensor
+                               ? .sensor : .manual(AngleSource.restingAngle))
         }
     }
 }

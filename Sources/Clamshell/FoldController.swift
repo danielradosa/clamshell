@@ -28,11 +28,12 @@ final class FoldController {
     private let capture: ScreenCapture
 
     private var overlay: OverlayWindow?
-    private var latestFrame: MTLTexture?
+    private var latestFrame: CapturedFrame?
     private var watchTimer: Timer?
     private var state: State = .idle
     private var cancellables = Set<AnyCancellable>()
     private var wasEngaged = false
+    private let escapeHotKey = EscapeHotKey()
 
     /// How far above the engage angle the capture stream spins up.
     ///
@@ -65,17 +66,21 @@ final class FoldController {
         self.renderer = try FoldRenderer(device: device)
         self.capture = ScreenCapture(device: device)
 
-        capture.onFrame = { [weak self] texture in
+        capture.onFrame = { [weak self] frame in
             // Delivered on the capture queue; hop to main where rendering lives.
-            Task { @MainActor in self?.latestFrame = texture }
+            Task { @MainActor in self?.latestFrame = frame }
         }
         capture.onFailure = { [weak self] _ in
             Task { @MainActor in self?.teardown() }
         }
 
-        // If the sensor is missing, fall straight into the looping demo so the
-        // app is still worth running on a desktop Mac.
-        if !angleSource.hasSensor { angleSource.mode = .demo }
+        // A Mac with no lid sensor must sit still by default. Falling back to
+        // the looping demo here would mean an app that throws a fullscreen
+        // overlay across the screen every few seconds, forever. The demo is
+        // reachable on request instead, from the menu or from Settings.
+        if !angleSource.hasSensor {
+            angleSource.mode = .manual(AngleSource.restingAngle)
+        }
 
         settings.$enabled
             .sink { [weak self] enabled in if !enabled { self?.teardown() } }
@@ -108,6 +113,7 @@ final class FoldController {
 
     private func watchTick() {
         angleSource.tick()
+        endDemoIfFinished()
         guard settings.enabled, !isPaused else {
             if state != .idle { teardown() }
             return
@@ -177,6 +183,23 @@ final class FoldController {
 
     // MARK: - Overlay
 
+    /// Plays one close-and-open sweep, then settles back. Used from the menu so
+    /// the effect can be seen on demand, including on Macs with no sensor.
+    func playDemo() {
+        angleSource.mode = .demo
+        angleSource.reset(to: AngleSource.restingAngle)
+        demoDeadline = Date().addingTimeInterval(3.6)
+    }
+
+    private var demoDeadline: Date?
+
+    private func endDemoIfFinished() {
+        guard let deadline = demoDeadline, Date() >= deadline else { return }
+        demoDeadline = nil
+        angleSource.mode = angleSource.hasSensor ? .sensor : .manual(AngleSource.restingAngle)
+        angleSource.reset()
+    }
+
     private func presentOverlay() {
         guard overlay == nil else { return }
         let screen = NSScreen.screens.first { $0.localizedName.contains("Built-in") } ?? NSScreen.main
@@ -188,21 +211,28 @@ final class FoldController {
         }
         window.present()
         overlay = window
+
+        // Escape pauses while the fold is on screen, and only while it is.
+        escapeHotKey.arm { [weak self] in
+            guard let self, !self.isPaused else { return }
+            self.isPaused = true
+        }
     }
 
     private func tearDownOverlay() {
+        escapeHotKey.disarm()
         overlay?.metalView.onFrame = nil
         overlay?.orderOut(nil)
         overlay = nil
     }
 
     private func drawFrame(into layer: CAMetalLayer) {
-        guard state == .active, let source = latestFrame else { return }
+        guard state == .active, let frame = latestFrame else { return }
         angleSource.tick()
         let fold = FoldCurve.progress(angle: angleSource.angle, engageAngle: settings.engageAngle)
         previewFold = fold
         guard let drawable = layer.nextDrawable() else { return }
-        renderer.render(source: source, fold: fold, style: settings.style, drawable: drawable)
+        renderer.render(source: frame.texture, fold: fold, style: settings.style, drawable: drawable)
     }
 
     // MARK: - Sound

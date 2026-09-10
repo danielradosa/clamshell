@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ServiceManagement
 
 /// The status item, its menu, and the settings window.
 ///
@@ -14,13 +15,11 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private var settingsWindow: NSWindow?
     private var settingsModel: SettingsModel?
     private weak var controller: FoldController?
-    private var escapeMonitor: Any?
 
     init(controller: FoldController?) {
         self.controller = controller
         super.init()
         installStatusItem()
-        installEscapeMonitor()
     }
 
     private func installStatusItem() {
@@ -46,7 +45,20 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         pause.tag = 1
         menu.addItem(pause)
 
+        let demo = NSMenuItem(
+            title: "Preview Effect", action: #selector(playDemo), keyEquivalent: ""
+        )
+        demo.target = self
+        menu.addItem(demo)
+
         menu.addItem(.separator())
+
+        let launchAtLogin = NSMenuItem(
+            title: "Open at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: ""
+        )
+        launchAtLogin.target = self
+        launchAtLogin.tag = 2
+        menu.addItem(launchAtLogin)
 
         let settings = NSMenuItem(
             title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
@@ -69,6 +81,34 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 
     // MARK: - Actions
 
+    @objc private func playDemo() {
+        controller?.playDemo()
+    }
+
+    /// SMAppService registers the bundle by its path, so this only sticks for an
+    /// app in a stable location. Running straight out of the build directory
+    /// registers a path that will not survive a `make clean`.
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could not change the login item"
+            alert.informativeText = error.localizedDescription
+                + "\n\nmacOS registers login items by bundle path. Install "
+                + "Clamshell to /Applications and try again."
+            alert.alertStyle = .warning
+            NSApp.activate()
+            alert.runModal()
+        }
+        refreshStatusAppearance()
+    }
+
     @objc private func togglePause() {
         guard let controller else { return }
         controller.isPaused.toggle()
@@ -80,6 +120,9 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         statusItem?.button?.appearsDisabled = paused
         if let item = statusItem?.menu?.item(withTag: 1) {
             item.title = paused ? "Resume" : "Pause"
+        }
+        if let item = statusItem?.menu?.item(withTag: 2) {
+            item.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
     }
 
@@ -108,12 +151,12 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     /// makes the window actually take key, and it must happen before the
     /// makeKeyAndOrderFront call rather than after.
     private func bringToFront(_ window: NSWindow) {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
 
     @objc private func openAbout() {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "Clamshell",
             .init(rawValue: "Copyright"): "MIT licensed. github.com/danielradosa/clamshell",
@@ -122,20 +165,6 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
-    }
-
-    // MARK: - Escape to pause
-
-    /// A *local* monitor sees events only while this app is frontmost, which
-    /// needs no Accessibility permission. A global monitor would catch Escape
-    /// anywhere but would require the user to grant Accessibility access, which
-    /// is a steep ask for a cosmetic feature.
-    private func installEscapeMonitor() {
-        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event }   // 53 = Escape
-            self?.togglePause()
-            return nil
-        }
     }
 
     func windowWillClose(_ notification: Notification) {

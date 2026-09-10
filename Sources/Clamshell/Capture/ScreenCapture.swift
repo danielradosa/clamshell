@@ -4,6 +4,25 @@ import CoreVideo
 import Metal
 import AppKit
 
+/// One desktop frame, with everything the GPU texture depends on kept alive.
+///
+/// `CVMetalTextureGetTexture` hands back a texture that is only valid while its
+/// `CVMetalTexture` wrapper lives, and the underlying pixel buffer belongs to a
+/// pool that will re-vend and overwrite it once the last reference goes. Holding
+/// a frame past the delegate callback therefore means holding all three, not
+/// just the `MTLTexture`.
+final class CapturedFrame {
+    let texture: MTLTexture
+    private let cvTexture: CVMetalTexture
+    private let pixelBuffer: CVPixelBuffer
+
+    init(texture: MTLTexture, cvTexture: CVMetalTexture, pixelBuffer: CVPixelBuffer) {
+        self.texture = texture
+        self.cvTexture = cvTexture
+        self.pixelBuffer = pixelBuffer
+    }
+}
+
 /// Streams the live desktop into Metal textures.
 ///
 /// The stream deliberately excludes this application from the capture. Without
@@ -15,7 +34,7 @@ import AppKit
 final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Called on the capture queue each time a new desktop frame arrives.
-    var onFrame: ((MTLTexture) -> Void)?
+    var onFrame: ((CapturedFrame) -> Void)?
 
     /// Called on the main queue if the stream dies, usually because the display
     /// was reconfigured or permission was revoked.
@@ -100,20 +119,22 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         guard type == .screen, sampleBuffer.isValid else { return }
 
         // ScreenCaptureKit sends frames even when nothing changed; the status
-        // attachment tells us which ones carry new pixels.
+        // attachment says which ones carry pixels. Both `complete` and `started`
+        // do — `started` is the first frame after the stream comes up, and
+        // dropping it means a completely static desktop may never render at all.
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
            let statusValue = attachments.first?[.status] as? Int,
            let status = SCFrameStatus(rawValue: statusValue),
-           status != .complete {
+           status != .complete, status != .started {
             return
         }
 
         guard let pixelBuffer = sampleBuffer.imageBuffer,
-              let texture = makeTexture(from: pixelBuffer) else { return }
-        onFrame?(texture)
+              let frame = makeFrame(from: pixelBuffer) else { return }
+        onFrame?(frame)
     }
 
-    private func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+    private func makeFrame(from pixelBuffer: CVPixelBuffer) -> CapturedFrame? {
         guard let cache = textureCache else { return nil }
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -123,8 +144,15 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             kCFAllocatorDefault, cache, pixelBuffer, nil,
             .bgra8Unorm, width, height, 0, &cvTexture
         )
-        guard status == kCVReturnSuccess, let cvTexture else { return nil }
-        return CVMetalTextureGetTexture(cvTexture)
+        guard status == kCVReturnSuccess,
+              let cvTexture,
+              let texture = CVMetalTextureGetTexture(cvTexture) else { return nil }
+
+        // Drops cache entries nothing still references. Frames we are holding
+        // keep their own references, so this cannot pull one out from under us.
+        CVMetalTextureCacheFlush(cache, 0)
+
+        return CapturedFrame(texture: texture, cvTexture: cvTexture, pixelBuffer: pixelBuffer)
     }
 
     // MARK: - SCStreamDelegate

@@ -208,3 +208,46 @@ if let sheetImage = sheet.makeImage() {
 print("Wrote \(written) images to \(outputDirectory.path)")
 print("Rows: \(FoldStyle.all.map(\.name).joined(separator: ", "))")
 print("Columns: fold \(folds.map { String(format: "%.2f", $0) }.joined(separator: ", "))")
+
+
+// ---------------------------------------------------------------------------
+// Throughput check at real Retina resolution.
+//
+// The M2 Air's internal panel is 2560x1664, but the window server renders it
+// from a 3420x2224 backing store, so that is the size the GPU actually pushes.
+// Benchmarking at 1440x900 would flatter the numbers by a factor of six.
+// ---------------------------------------------------------------------------
+let benchWidth = 3420, benchHeight = 2224
+let benchDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+    pixelFormat: .bgra8Unorm, width: benchWidth, height: benchHeight, mipmapped: false
+)
+benchDescriptor.usage = [.renderTarget, .shaderRead]
+benchDescriptor.storageMode = .private
+let benchTarget = device.makeTexture(descriptor: benchDescriptor)!
+
+let sourceDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+    pixelFormat: .bgra8Unorm, width: benchWidth, height: benchHeight, mipmapped: false
+)
+sourceDescriptor.usage = [.shaderRead]
+sourceDescriptor.storageMode = .private
+let benchSource = device.makeTexture(descriptor: sourceDescriptor)!
+
+// Warm up: first frame pays for pipeline and blur-texture allocation.
+for _ in 0..<5 {
+    renderer.render(source: benchSource, fold: 0.5, style: .glacier,
+                    into: benchTarget, waitForCompletion: true)
+}
+
+let iterations = 120
+let benchStart = Date()
+for i in 0..<iterations {
+    renderer.render(source: benchSource, fold: Double(i) / Double(iterations),
+                    style: .glacier, into: benchTarget, waitForCompletion: true)
+}
+let elapsed = Date().timeIntervalSince(benchStart)
+let perFrameMs = elapsed / Double(iterations) * 1000
+
+print("")
+print("Throughput at \(benchWidth)x\(benchHeight), heaviest style (Glacier):")
+print(String(format: "  %.2f ms per frame  =  %.0f fps ceiling", perFrameMs, 1000 / perFrameMs))
+print(String(format: "  60fps budget is 16.67 ms, 120fps is 8.33 ms"))

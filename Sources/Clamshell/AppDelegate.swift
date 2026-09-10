@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Later")
         alert.alertStyle = .informational
 
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         if alert.runModal() == .alertFirstButtonReturn {
             let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
             NSWorkspace.shared.open(url)
@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .critical
         alert.addButton(withTitle: "Quit")
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         alert.runModal()
         NSApp.terminate(nil)
     }
