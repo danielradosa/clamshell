@@ -36,20 +36,33 @@ enum FoldCurve {
 
     /// Shapes the normalised 0...1 travel.
     ///
-    /// TODO(daniel): this is the tuning knob worth playing with. The default is a
-    /// quintic ease-in — deliberately slow to start so a lid that is merely tilted
-    /// looks untouched, then accelerating hard through the final stretch.
+    /// A cubic ease-in: slow enough at the start that a lid which is merely
+    /// tilted looks untouched, but far enough along by the time the lid is
+    /// halfway down that the fold is actually seen.
     ///
-    /// Alternatives worth trying, in rough order of how different they feel:
-    ///   - `t * t`                        gentler, effect shows up much earlier
-    ///   - `t * t * t`                    the middle ground
-    ///   - `t * t * (3 - 2 * t)`          smoothstep: eases in AND out, feels softer
-    ///                                    and more mechanical, less like gravity
-    ///   - `1 - pow(1 - t, 3)`            ease-out: almost all the motion up front,
-    ///                                    then it hangs. Reads as the screen giving
-    ///                                    way immediately.
-    ///   - `pow(t, 1.5)`                  barely-curved, closest to linear
+    /// The curve is constrained by a hardware fact. With `engageAngle` at its
+    /// default of 75 degrees, this is what each curve produces:
+    ///
+    ///     angle     t^5      t^3    smoothstep
+    ///        60   0.001    0.013         0.143
+    ///        40   0.053    0.171         0.583
+    ///        30   0.186    0.364         0.802
+    ///        20   0.507    0.665         0.956
+    ///        15   0.784    0.864         0.993   <- backlight cutting out
+    ///
+    /// A quintic puts almost the whole effect below 20 degrees, which is past
+    /// the point where the panel starts going dark — so most of the animation
+    /// would play on a screen nobody can see. That is why it is not the default.
+    ///
+    /// TODO(daniel): this is the knob worth playing with. Alternatives, roughly
+    /// ordered by how eager they feel:
+    ///   - `t * t * t * t * t`    quintic: very late, mostly invisible in practice
+    ///   - `t * t`                earlier still than cubic
+    ///   - `t * t * (3 - 2 * t)`  smoothstep: eases in AND out. Softer and more
+    ///                            mechanical, and visible from about 60 degrees
+    ///   - `1 - pow(1 - t, 3)`    ease-out: nearly all the motion up front, then
+    ///                            it hangs. Reads as the screen giving way at once
     private static func ease(_ t: Double) -> Double {
-        t * t * t * t * t
+        t * t * t
     }
 }

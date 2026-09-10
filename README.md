@@ -157,10 +157,22 @@ exactly as a real lid does. The fragment shader mixes between the sharp texture
 and a separably blurred half-resolution copy, with the mix weighted by depth so
 the receding edge falls out of focus first.
 
-**Speed.** One frame at 3420×2224 — the backing store the window server actually
-renders the M2 Air's panel from — takes 1.31 ms in the heaviest style. That is a
-764 fps ceiling, against a 16.67 ms budget at 60 Hz. Reproduce it with
-`make preview`.
+**The curve.** The mapping from hinge angle to fold progress is a cubic ease-in,
+and the shape is constrained by hardware rather than taste: the panel backlight
+cuts out somewhere around 10–15°, so a curve that saves its motion for the last
+few degrees plays most of the animation on a screen that is already dark. A
+quintic is still under 0.1 at 25°, which is why it is not the default.
+
+**Cost.** Measured on an M2 Air:
+
+| State | CPU | Notes |
+| --- | --- | --- |
+| Idle, lid open | 0.6% | Sensor polled 10×/s, no capture stream |
+| Folding | 16% | Live capture plus render at Retina resolution |
+| One frame, 3420×2224 | 1.29 ms | Heaviest style; a 764 fps ceiling |
+
+The 16% only applies for the second or two the lid is actually moving.
+Reproduce the frame time with `make preview`.
 
 **Power.** The capture stream is not left running. It starts when the lid drops
 near the engage angle *or* when the lid starts moving downward faster than 15°/s
