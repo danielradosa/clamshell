@@ -26,11 +26,40 @@ FRAMEWORK_FLAGS := $(addprefix -framework ,$(FRAMEWORKS))
 DEPLOY_TARGET := arm64-apple-macos14.0
 SWIFTC_FLAGS  := -O -swift-version 5 -target $(DEPLOY_TARGET)
 
-# Set CODESIGN_IDENTITY to a self-signed certificate to keep the Screen
-# Recording grant across rebuilds; ad-hoc is the default.
-CODESIGN_IDENTITY ?= -
+# Signing identity. A stable certificate is what keeps the Screen Recording
+# grant alive across rebuilds — an ad-hoc signature changes the app's code hash
+# every build, so TCC treats each build as a new app and asks again. Uses the
+# local certificate when it exists and falls back to ad-hoc when it does not.
+SIGNING_CERT_NAME := Clamshell Local Signing
+CODESIGN_IDENTITY ?= $(shell security find-certificate -c "$(SIGNING_CERT_NAME)" \
+    >/dev/null 2>&1 && echo "$(SIGNING_CERT_NAME)" || echo "-")
 
-.PHONY: all build bundle sign run install uninstall clean reset-permission debug
+.PHONY: all build bundle sign run install uninstall clean reset-permission debug \
+        setup certificate remove-certificate diagnose
+
+# One command from a fresh clone to a working, permission-stable install.
+setup: certificate install reset-permission
+	@echo ""
+	@echo "Clamshell is installed at /Applications/Clamshell.app."
+	@echo "Launch it and grant Screen Recording once — it will stick from now on."
+	@open /Applications/Clamshell.app
+
+certificate:
+	@Scripts/make-signing-certificate.sh
+
+remove-certificate:
+	@Scripts/make-signing-certificate.sh --remove
+
+# Writes ~/Library/Logs/Clamshell-diagnostics.txt describing what the app can
+# actually see: permission state, displays, sensor availability and angle.
+diagnose:
+	@pkill -x $(APP_NAME) 2>/dev/null || true
+	@rm -f "$(HOME)/Library/Logs/Clamshell-diagnostics.txt"
+	@open -a /Applications/$(APP_NAME).app --args --diagnose 2>/dev/null \
+		|| open -a "$(APP)" --args --diagnose
+	@sleep 4
+	@cat "$(HOME)/Library/Logs/Clamshell-diagnostics.txt" 2>/dev/null \
+		|| echo "No report written — is Clamshell installed?"
 
 all: bundle sign
 
@@ -53,10 +82,13 @@ bundle: build
 sign:
 	@codesign --force --sign "$(CODESIGN_IDENTITY)" "$(APP)"
 	@echo "Signed   with: $(CODESIGN_IDENTITY)"
+ifeq ($(CODESIGN_IDENTITY),-)
+	@echo "  NOTE: ad-hoc signature. macOS will ask for Screen Recording again"
+	@echo "        after every rebuild. Run 'make certificate' to stop that."
+endif
 
-run: all
-	@pkill -x $(APP_NAME) 2>/dev/null || true
-	@open "$(APP)"
+run: install
+	@open "/Applications/$(APP_NAME).app"
 	@echo "Launched. Look for the laptop icon in the menu bar."
 
 # A stable install path is what lets the Screen Recording grant persist.

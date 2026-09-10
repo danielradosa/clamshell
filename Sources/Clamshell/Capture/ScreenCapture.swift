@@ -52,16 +52,6 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
     }
 
-    /// Whether the user has already granted Screen Recording permission.
-    /// Returns false without prompting.
-    static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
-
-    /// Triggers the system Screen Recording prompt. Returns immediately; macOS
-    /// only shows the prompt once per app, and afterwards the user must grant it
-    /// in System Settings.
-    @discardableResult
-    static func requestPermission() -> Bool { CGRequestScreenCaptureAccess() }
-
     /// Starts capturing the display the given window sits on.
     func start(on displayID: CGDirectDisplayID) async throws {
         stop()

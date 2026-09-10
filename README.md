@@ -9,6 +9,11 @@ comes down. Open the lid past a threshold and it clears instantly.
 
 It sits in the menu bar, needs no account, and sends nothing anywhere.
 
+The menu bar icon is the interface: **Pause**, **Preview Effect**, **Open at
+Login**, **Screen Recording…** and **Settings…**. The icon carries a warning
+badge whenever screen access is missing. On first successful launch the Settings
+window opens by itself, so there is something to look at.
+
 <!-- Add a screen recording here once you have one. -->
 
 ## Requirements
@@ -32,16 +37,21 @@ Then:
 ```bash
 git clone https://github.com/danielradosa/clamshell.git
 cd clamshell
-make install
+make setup
 ```
 
-`make install` builds the app, assembles the bundle, signs it and copies it to
-`/Applications`. Other targets:
+`make setup` creates a local signing certificate, builds, installs to
+`/Applications`, clears any stale permission state and launches the app. Grant
+Screen Recording once when asked, then relaunch. Other targets:
 
 | Target | What it does |
 | --- | --- |
+| `make setup` | Certificate, build, install, launch — start here |
 | `make` | Build and sign into `.dist/Clamshell.app` |
-| `make run` | Build and launch without installing |
+| `make run` | Build, install and launch |
+| `make diagnose` | Report what the app can actually see |
+| `make certificate` | Create the local signing identity |
+| `make remove-certificate` | Delete it again |
 | `make preview` | Render the effect offscreen to PNGs in `.dist/preview` |
 | `make debug` | Unoptimised build with symbols |
 | `make reset-permission` | Clear the Screen Recording grant |
@@ -72,16 +82,44 @@ no network code in the app at all.
 
 Reading the lid angle needs no permission, no entitlement and no root.
 
-If the effect never appears, check **System Settings ▸ Privacy & Security ▸
-Screen & System Audio Recording**. Ad-hoc code signatures change on every
-rebuild, so a rebuilt app can be left holding a stale grant; `make
-reset-permission` clears it so the prompt comes back.
+### Why permission used to be asked for over and over
 
-To keep the grant across rebuilds, sign with a self-signed certificate instead:
+macOS ties a Screen Recording grant to the app's *designated requirement*. Under
+an ad-hoc signature that requirement is the binary's code hash, which changes on
+every single build — so each rebuild looked like a brand-new app, the previous
+grant was stranded, and the prompt came back. Granting it repeatedly never
+helped, because every grant was against a build that no longer existed. System
+Settings would show Clamshell switched on while the running app had no access.
+
+`make certificate` fixes this at the root by creating a self-signed code-signing
+identity in your login keychain. The requirement becomes
+
+```
+identifier "com.danielradosa.clamshell" and certificate root = H"..."
+```
+
+which depends on the bundle ID and that certificate rather than on the binary, so
+it is byte-identical across rebuilds. Grant once; it stays granted.
+
+The certificate is local and self-signed. It is not a developer ID, it confers no
+trust, it signs nothing but this app, and `make remove-certificate` deletes it.
+
+### If it still is not working
 
 ```bash
-make CODESIGN_IDENTITY="Your Certificate Name"
+make diagnose
 ```
+
+That launches the app in a mode that reports what it can actually see — whether
+ScreenCaptureKit will hand over a display, which is the authoritative test, plus
+the lid sensor state and current angle. The report is also written to
+`~/Library/Logs/Clamshell-diagnostics.txt`.
+
+Two things worth knowing:
+
+- A running app cannot pick up a grant made after it started. Always relaunch.
+- Two copies of the app in different folders are two different apps to macOS.
+  Keep one, in `/Applications`.
 
 ## How it works
 

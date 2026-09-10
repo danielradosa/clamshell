@@ -174,8 +174,13 @@ final class FoldController {
         latestFrame != nil
     }
 
+    /// Set by the app delegate once the permission check has actually answered.
+    /// Nothing tries to capture before then, so a launch with no permission is
+    /// quiet rather than a stream of failures.
+    var isCaptureAllowed = false
+
     private func startCapture() {
-        guard ScreenCapture.hasPermission else { return }
+        guard isCaptureAllowed else { return }
         let displayID = displayIDForOverlay()
         Task { try? await capture.start(on: displayID) }
     }

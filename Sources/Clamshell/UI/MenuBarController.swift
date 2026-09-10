@@ -14,6 +14,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var settingsModel: SettingsModel?
+    private var onboardingWindow: NSWindow?
+    private var onboardingModel: OnboardingModel?
     private weak var controller: FoldController?
 
     init(controller: FoldController?) {
@@ -66,6 +68,13 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         settings.target = self
         menu.addItem(settings)
 
+        let permission = NSMenuItem(
+            title: "Screen Recording…", action: #selector(openOnboarding), keyEquivalent: ""
+        )
+        permission.target = self
+        permission.tag = 3
+        menu.addItem(permission)
+
         let about = NSMenuItem(title: "About Clamshell", action: #selector(openAbout), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
@@ -115,9 +124,23 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         refreshStatusAppearance()
     }
 
+    /// Reflected in the menu bar so a missing permission is visible at a glance
+    /// rather than only discoverable by wondering why nothing happens.
+    var needsPermission = false {
+        didSet { refreshStatusAppearance() }
+    }
+
     private func refreshStatusAppearance() {
         let paused = controller?.isPaused ?? false
-        statusItem?.button?.appearsDisabled = paused
+        statusItem?.button?.appearsDisabled = paused || needsPermission
+        statusItem?.button?.image = NSImage(
+            systemSymbolName: needsPermission ? "laptopcomputer.trianglebadge.exclamationmark"
+                                              : "laptopcomputer",
+            accessibilityDescription: "Clamshell"
+        )
+        statusItem?.button?.image?.isTemplate = true
+        statusItem?.menu?.item(withTag: 3)?.title =
+            needsPermission ? "Screen Recording — Not Granted…" : "Screen Recording…"
         if let item = statusItem?.menu?.item(withTag: 1) {
             item.title = paused ? "Resume" : "Pause"
         }
@@ -126,7 +149,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc private func openSettings() {
+    @objc func openSettings() {
         if let window = settingsWindow {
             bringToFront(window)
             return
@@ -155,6 +178,33 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    @objc func openOnboarding() {
+        if let window = onboardingWindow {
+            onboardingModel?.recheck()
+            bringToFront(window)
+            return
+        }
+        let model = OnboardingModel()
+        model.onGranted = { [weak self] in self?.permissionBecameAvailable() }
+        onboardingModel = model
+
+        let window = NSWindow(contentViewController: NSHostingController(rootView: OnboardingView(model: model)))
+        window.title = "Clamshell Setup"
+        window.styleMask = [.titled, .closable]
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        onboardingWindow = window
+        bringToFront(window)
+    }
+
+    /// Called when a re-check finds the grant has appeared. The running process
+    /// still cannot use it — macOS does not extend a new grant to an already
+    /// running app — so the honest move is to say so rather than pretend.
+    private func permissionBecameAvailable() {
+        controller?.isCaptureAllowed = true
+    }
+
     @objc private func openAbout() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(options: [
@@ -168,10 +218,15 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard (notification.object as? NSWindow) === settingsWindow else { return }
-        settingsModel?.endPreview()
-        settingsModel = nil
-        settingsWindow = nil
+        let window = notification.object as? NSWindow
+        if window === settingsWindow {
+            settingsModel?.endPreview()
+            settingsModel = nil
+            settingsWindow = nil
+        } else if window === onboardingWindow {
+            onboardingModel = nil
+            onboardingWindow = nil
+        }
     }
 }
 
