@@ -203,6 +203,16 @@ position along the sheet, so the panel reads as a surface receding into depth
 rather than a flat picture with a filter over it. The gradient flattens as the
 lid finishes closing, so nothing is left sharp at the very end.
 
+The panel's own silhouette bleeds *outward* into the black, which needs two
+passes. Fading the edge inward only shrinks the shape; a genuinely blurred object
+spreads past its own outline, and a single quad cannot do that because it simply
+stops at its boundary. So the fold is drawn into an offscreen layer with
+transparency, that layer is mipmapped, and the composite reads a high mip level
+wherever the layer's own alpha falls below one. The interior is untouched, so the
+near edge stays crisp, while the outline spreads into the background. The spread
+is a fraction of screen width rather than a texel count, or it would be
+proportionally smaller on a Retina display than on a small one.
+
 The panel's own silhouette dissolves into the background too. Without that the
 content softens while the trapezoid keeps a hard outline against the black, which
 gives away that it is a texture on a quad. The falloff is a rounded-box distance

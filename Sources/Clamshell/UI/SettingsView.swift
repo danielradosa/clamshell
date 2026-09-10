@@ -1,131 +1,177 @@
 import SwiftUI
 
 struct SettingsView: View {
+
     @ObservedObject private var settings = Settings.shared
     @ObservedObject var model: SettingsModel
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
+        HStack(alignment: .top, spacing: 0) {
             preview
-            controls
+                .frame(width: 268)
+                .padding(20)
+                .background(Color(nsColor: .underPageBackgroundColor))
+
+            Divider()
+
+            ScrollView {
+                controls.padding(20)
+            }
+            .frame(width: 372)
         }
-        .padding(24)
-        .frame(width: 640, height: 520)
+        .frame(width: 640, height: 560)
         .onAppear { model.beginPreview() }
         .onDisappear { model.endPreview() }
     }
 
     private var preview: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             LidPreview(fold: model.previewFold, style: settings.style)
-                .frame(width: 240, height: 190)
+                .frame(height: 200)
 
-            if model.hasSensor {
-                Text("\(Int(model.liveAngle))°")
-                    .font(.system(.title3, design: .rounded).monospacedDigit())
-                Text("Live from the lid sensor")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("No lid sensor on this Mac")
-                    .font(.callout)
-                Text("Showing a looping demo instead")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(spacing: 3) {
+                if model.hasSensor {
+                    Text("\(Int(model.liveAngle))°")
+                        .font(.system(size: 30, weight: .medium, design: .rounded).monospacedDigit())
+                    Text("Live lid angle")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "laptopcomputer.slash")
+                        .font(.system(size: 24)).foregroundStyle(.secondary)
+                    Text("No lid sensor")
+                        .font(.callout.weight(.medium))
+                    Text("Drag below to preview")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
-            Slider(value: $model.scrubAngle, in: 0...120) {
-                Text("Angle")
-            }
-            .disabled(!model.isScrubbing)
+            Divider()
 
-            Toggle("Drag to preview an angle", isOn: $model.isScrubbing)
-                .toggleStyle(.checkbox)
-                .font(.caption)
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: $model.isScrubbing) {
+                    Text("Preview an angle by hand").font(.callout)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "laptopcomputer").font(.caption2).foregroundStyle(.secondary)
+                    Slider(value: $model.scrubAngle, in: 0...120)
+                    Text("\(Int(model.scrubAngle))°")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
+                .disabled(!model.isScrubbing)
+                .opacity(model.isScrubbing ? 1 : 0.4)
+            }
+
+            Spacer(minLength: 0)
         }
-        .frame(width: 240)
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Toggle("Enable the fold effect", isOn: $settings.enabled)
-                .toggleStyle(.switch)
+        VStack(alignment: .leading, spacing: 20) {
+            Toggle(isOn: $settings.enabled) {
+                Text("Enable the fold effect").font(.body.weight(.medium))
+            }
+            .toggleStyle(.switch)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Style").font(.headline)
+            section("Style") {
                 Picker("", selection: $settings.styleID) {
-                    ForEach(FoldStyle.all) { style in
-                        Text(style.name).tag(style.id)
-                    }
+                    ForEach(FoldStyle.all) { Text($0.name).tag($0.id) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+
                 Text(FoldStyle.named(settings.styleID).blurb)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(height: 28, alignment: .top)
-            }
-
-            Divider()
-
-            labelledSlider("Depth", value: $settings.perspectiveScale, range: 0...2)
-            labelledSlider("Blur", value: $settings.blurScale, range: 0...2)
-            labelledSlider("Shadow", value: $settings.shadowScale, range: 0...2)
-            labelledSlider("Edge", value: $settings.edgeScale, range: 0...3)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Clears above").font(.callout)
-                    Spacer()
-                    Text("\(Int(settings.engageAngle))°")
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $settings.engageAngle, in: 30...110)
-                Text("Open the lid past this angle and the effect gets out of the way.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Opening animation").font(.callout)
-                    Spacer()
-                    Text(String(format: "%.2fs", settings.unfoldDuration))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $settings.unfoldDuration, in: 0.3...1.5)
-                Text("A lid is opened faster than the screen can switch on, so the unfold plays on its own clock.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(height: 30, alignment: .top)
             }
 
-            Toggle("Click when the effect clears", isOn: $settings.soundEnabled)
-                .toggleStyle(.checkbox)
+            section("Intensity") {
+                slider("Blur", "camera.filters", $settings.blurScale, 0...2)
+                slider("Depth", "cube", $settings.perspectiveScale, 0...2)
+                slider("Shadow", "moon.fill", $settings.shadowScale, 0...2)
+                slider("Edge", "square.dashed", $settings.edgeScale, 0...3)
+            }
 
-            Spacer()
+            section("Behaviour") {
+                labelled("Clears above", value: "\(Int(settings.engageAngle))°") {
+                    Slider(value: $settings.engageAngle, in: 30...115)
+                }
+                Text("Open the lid past this angle and the effect gets out of the way.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                labelled("Opening animation",
+                         value: String(format: "%.2fs", settings.unfoldDuration)) {
+                    Slider(value: $settings.unfoldDuration, in: 0.3...1.5)
+                }
+                Text("A lid opens faster than the screen switches on, so the unfold runs on its own clock.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle(isOn: $settings.soundEnabled) {
+                    Text("Click when the effect clears").font(.callout)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.top, 2)
+            }
+
+            Divider()
 
             HStack {
                 Spacer()
                 Button("Reset to Defaults") { settings.resetToDefaults() }
+                    .controlSize(.regular)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(!settings.enabled)
+        .opacity(settings.enabled ? 1 : 0.5)
     }
 
-    private func labelledSlider(_ title: String, value: Binding<Double>,
-                                range: ClosedRange<Double>) -> some View {
-        HStack {
-            Text(title).font(.callout).frame(width: 60, alignment: .leading)
-            Slider(value: value, in: range)
-            Text(String(format: "%.0f%%", value.wrappedValue * 100))
-                .font(.caption.monospacedDigit())
+    private func section<Content: View>(
+        _ title: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .trailing)
+                .kerning(0.6)
+            content()
+        }
+    }
+
+    private func slider(_ title: String, _ symbol: String,
+                        _ value: Binding<Double>, _ range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 10) {
+            Label {
+                Text(title).font(.callout)
+            } icon: {
+                Image(systemName: symbol).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(width: 90, alignment: .leading)
+
+            Slider(value: value, in: range)
+
+            Text("\(Int(value.wrappedValue * 100))%")
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
+        }
+    }
+
+    private func labelled<Content: View>(
+        _ title: String, value: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(.callout)
+                Spacer()
+                Text(value).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            content()
         }
     }
 }
@@ -135,41 +181,28 @@ struct LidPreview: View {
     let style: FoldStyle
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.black)
+        GeometryReader { geo in
+            ZStack {
+                RoundedRectangle(cornerRadius: 12).fill(.black)
 
-            GeometryReader { geo in
-                let angle = fold * 82.0
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.36, green: 0.52, blue: 0.86),
-                                Color(red: 0.62, green: 0.36, blue: 0.72),
-                            ],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(LinearGradient(
+                        colors: [Color(red: 0.30, green: 0.42, blue: 0.86),
+                                 Color(red: 0.66, green: 0.34, blue: 0.74),
+                                 Color(red: 0.92, green: 0.48, blue: 0.42)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
                     .overlay(
-                        LinearGradient(
-                            colors: [.clear, .black.opacity(style.shadowStrength * fold)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                    )
-                    .blur(radius: style.blurRadius * fold * fold * 0.35)
-                    .brightness(-style.darkening * fold * 0.8)
-                    .rotation3DEffect(
-                        .degrees(angle),
-                        axis: (x: 1, y: 0, z: 0),
-                        anchor: .bottom,
-                        perspective: style.perspective * 0.9
-                    )
-                    .padding(12)
-                    .frame(width: geo.size.width, height: geo.size.height)
+                        LinearGradient(colors: [.clear, .black.opacity(style.shadowStrength * fold)],
+                                       startPoint: .bottom, endPoint: .top)
+                        .clipShape(RoundedRectangle(cornerRadius: 5)))
+                    .blur(radius: style.blurRadius * fold * 0.06)
+                    .brightness(-style.darkening * fold * 0.7)
+                    .rotation3DEffect(.degrees(fold * 82), axis: (x: 1, y: 0, z: 0),
+                                      anchor: .bottom, perspective: style.perspective * 0.7)
+                    .padding(14)
             }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }

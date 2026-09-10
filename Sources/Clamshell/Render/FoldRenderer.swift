@@ -30,12 +30,15 @@ final class FoldRenderer {
     private let commandQueue: MTLCommandQueue
     private let blurPipeline: MTLRenderPipelineState
     private let foldPipeline: MTLRenderPipelineState
+    private let compositePipeline: MTLRenderPipelineState
     private let gridBuffer: MTLBuffer
     private let gridVertexCount: Int
 
     private var blurA: MTLTexture?
     private var blurB: MTLTexture?
     private var blurSize: CGSize = .zero
+    private var panelTexture: MTLTexture?
+    private var panelSize: CGSize = .zero
 
     private static let blurDownsample: CGFloat = 4
     private static let blurIterations = 2
@@ -64,6 +67,7 @@ final class FoldRenderer {
 
         blurPipeline = try pipeline("fullscreenVertex", "blurFragment", blending: false)
         foldPipeline = try pipeline("foldVertex", "foldFragment", blending: true)
+        compositePipeline = try pipeline("fullscreenVertex", "compositeFragment", blending: true)
 
         let grid = Self.makeGrid(resolution: Self.gridResolution)
         gridVertexCount = grid.count
@@ -119,6 +123,19 @@ final class FoldRenderer {
         blurB = device.makeTexture(descriptor: mipped)
     }
 
+    private func ensurePanelTexture(for size: CGSize) {
+        guard size != panelSize || panelTexture == nil else { return }
+        panelSize = size
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: max(Int(size.width), 1), height: max(Int(size.height), 1),
+            mipmapped: true
+        )
+        desc.usage = [.renderTarget, .shaderRead]
+        desc.storageMode = .private
+        panelTexture = device.makeTexture(descriptor: desc)
+    }
+
     func copy(_ source: MTLTexture, into existing: MTLTexture?) -> MTLTexture? {
         var destination = existing
         if destination == nil
@@ -166,7 +183,8 @@ final class FoldRenderer {
                         finish: (MTLCommandBuffer) -> Void) {
         let size = CGSize(width: target.width, height: target.height)
         ensureBlurTextures(for: size)
-        guard let blurA, let blurB,
+        ensurePanelTexture(for: size)
+        guard let blurA, let blurB, let panelTexture,
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let foldAmount = Float(min(max(fold, 0), 1))
@@ -186,9 +204,9 @@ final class FoldRenderer {
         let lod = maxLOD * softAmount
 
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].texture = panelTexture
         pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.colorAttachments[0].storeAction = .store
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
@@ -214,6 +232,28 @@ final class FoldRenderer {
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<FoldUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: gridVertexCount)
         encoder.endEncoding()
+
+        if let bleedBlit = commandBuffer.makeBlitCommandEncoder() {
+            bleedBlit.generateMipmaps(for: panelTexture)
+            bleedBlit.endEncoding()
+        }
+
+        let composite = MTLRenderPassDescriptor()
+        composite.colorAttachments[0].texture = target
+        composite.colorAttachments[0].loadAction = .clear
+        composite.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        composite.colorAttachments[0].storeAction = .store
+        if let compositeEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: composite) {
+            let bleedFraction = min(Float(style.edgeSoftness) * 1.35, 0.13)
+                * pow(foldAmount, 0.55)
+            let bleedPixels = Float(size.width) * bleedFraction
+            var bleedLOD = bleedPixels > 1 ? log2(bleedPixels) : 0
+            compositeEncoder.setRenderPipelineState(compositePipeline)
+            compositeEncoder.setFragmentTexture(panelTexture, index: 0)
+            compositeEncoder.setFragmentBytes(&bleedLOD, length: MemoryLayout<Float>.stride, index: 0)
+            compositeEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            compositeEncoder.endEncoding()
+        }
 
         finish(commandBuffer)
         if commandBuffer.status == .notEnqueued {

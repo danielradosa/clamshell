@@ -140,5 +140,17 @@ enum Shaders {
         float alpha = smoothstep(1.0, 0.94, u.fold) * edgeAlpha;
         return float4(color * alpha, alpha);
     }
+
+    fragment float4 compositeFragment(FSOut in [[stage_in]],
+                                      texture2d<float> panel [[texture(0)]],
+                                      constant float &lod [[buffer(0)]]) {
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_zero);
+        float4 crisp = panel.sample(s, in.uv, level(0.0));
+        if (lod < 0.02) { return crisp; }
+
+        float4 soft = panel.sample(s, in.uv, level(lod));
+        float towardEdge = 1.0 - clamp(crisp.a, 0.0, 1.0);
+        return mix(crisp, soft, towardEdge);
+    }
     """
 }
