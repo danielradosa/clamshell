@@ -205,11 +205,17 @@ lid finishes closing, so nothing is left sharp at the very end.
 
 The panel's own silhouette dissolves into the background too. Without that the
 content softens while the trapezoid keeps a hard outline against the black, which
-gives away that it is a texture on a quad. The falloff uses a superellipse rather
-than a distance to the nearest edge — the latter keeps corners square, because
-both edges are equally near there, and square corners are the most obvious tell
-of all. It widens with the fold and with position along the sheet, so the far
-edge and its corners melt away while the edge at the hinge stays tighter.
+gives away that it is a texture on a quad. The falloff is a rounded-box distance
+field, which has to be measured carefully: a plain distance to the nearest edge
+leaves corners square, because both edges are equally near there, while a
+superellipse across the whole silhouette rounds it into a blob once the fade is
+wide enough to see. A rounded box keeps the sides straight and takes the corners
+off. Softness widens with the fold and with position along the sheet, so the far
+edge melts while the edge at the hinge stays tighter.
+
+Both the softness and the corner radius are style parameters, and Settings has an
+Edge slider on top, because this is the kind of thing that has to be judged by
+eye rather than reasoned about.
 
 Blur width comes from a mip chain rather than a wider kernel. Nine taps spread
 across forty texels sample a comb, not a gaussian, and the gaps show as ghosting
@@ -281,7 +287,7 @@ times a second and does nothing else.
 | Control | Effect |
 | --- | --- |
 | **Style** | Satin (glossy), Eclipse (deep shadow), Glacier (frosted) |
-| **Depth / Blur / Shadow** | Multipliers on the active style, so switching presets keeps your tuning |
+| **Depth / Blur / Shadow / Edge** | Multipliers on the active style, so switching presets keeps your tuning |
 | **Clears above** | Hinge angle at which the effect gets out of the way |
 | **Drag to preview** | Scrub an angle by hand, to judge a style at an angle you cannot hold |
 

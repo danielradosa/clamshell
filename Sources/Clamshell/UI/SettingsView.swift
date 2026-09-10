@@ -71,6 +71,7 @@ struct SettingsView: View {
             labelledSlider("Depth", value: $settings.perspectiveScale, range: 0...2)
             labelledSlider("Blur", value: $settings.blurScale, range: 0...2)
             labelledSlider("Shadow", value: $settings.shadowScale, range: 0...2)
+            labelledSlider("Edge", value: $settings.edgeScale, range: 0...3)
 
             Divider()
 

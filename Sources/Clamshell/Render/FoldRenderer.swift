@@ -16,6 +16,8 @@ final class FoldRenderer {
         var blurMix: Float = 0
         var blurLOD: Float = 0
         var vignette: Float = 0
+        var edgeSoftness: Float = 0
+        var cornerRadius: Float = 0
         var aspect: Float = 1
     }
 
@@ -200,6 +202,8 @@ final class FoldRenderer {
             blurMix: min(softAmount * 2.5, 1.0),
             blurLOD: lod,
             vignette: Float(style.vignette),
+            edgeSoftness: Float(style.edgeSoftness),
+            cornerRadius: Float(style.cornerRadius),
             aspect: Float(size.width / max(size.height, 1))
         )
         encoder.setRenderPipelineState(foldPipeline)

@@ -11,6 +11,7 @@ final class Settings: ObservableObject {
         static let perspectiveScale = "perspectiveScale"
         static let blurScale = "blurScale"
         static let shadowScale = "shadowScale"
+        static let edgeScale = "edgeScale"
         static let soundEnabled = "soundEnabled"
         static let unfoldDuration = "unfoldDuration"
     }
@@ -24,6 +25,7 @@ final class Settings: ObservableObject {
     @Published var perspectiveScale: Double { didSet { defaults.set(perspectiveScale, forKey: Key.perspectiveScale) } }
     @Published var blurScale: Double { didSet { defaults.set(blurScale, forKey: Key.blurScale) } }
     @Published var shadowScale: Double { didSet { defaults.set(shadowScale, forKey: Key.shadowScale) } }
+    @Published var edgeScale: Double { didSet { defaults.set(edgeScale, forKey: Key.edgeScale) } }
 
     @Published var soundEnabled: Bool { didSet { defaults.set(soundEnabled, forKey: Key.soundEnabled) } }
 
@@ -34,12 +36,14 @@ final class Settings: ObservableObject {
         s.perspective *= perspectiveScale
         s.blurRadius *= blurScale
         s.shadowStrength *= shadowScale
+        s.edgeSoftness *= edgeScale
         return s
     }
 
     func resetToDefaults() {
         for key in [Key.enabled, Key.styleID, Key.engageAngle, Key.perspectiveScale,
-                    Key.blurScale, Key.shadowScale, Key.soundEnabled, Key.unfoldDuration] {
+                    Key.blurScale, Key.shadowScale, Key.edgeScale, Key.soundEnabled,
+                    Key.unfoldDuration] {
             defaults.removeObject(forKey: key)
         }
         enabled = defaults.bool(forKey: Key.enabled)
@@ -48,6 +52,7 @@ final class Settings: ObservableObject {
         perspectiveScale = defaults.double(forKey: Key.perspectiveScale)
         blurScale = defaults.double(forKey: Key.blurScale)
         shadowScale = defaults.double(forKey: Key.shadowScale)
+        edgeScale = defaults.double(forKey: Key.edgeScale)
         soundEnabled = defaults.bool(forKey: Key.soundEnabled)
         unfoldDuration = defaults.double(forKey: Key.unfoldDuration)
     }
@@ -62,6 +67,7 @@ final class Settings: ObservableObject {
             Key.perspectiveScale: 1.0,
             Key.blurScale: 1.0,
             Key.shadowScale: 1.0,
+            Key.edgeScale: 1.0,
             Key.soundEnabled: false,
             Key.unfoldDuration: 1.0,
         ])
@@ -71,6 +77,7 @@ final class Settings: ObservableObject {
         perspectiveScale = defaults.double(forKey: Key.perspectiveScale)
         blurScale = defaults.double(forKey: Key.blurScale)
         shadowScale = defaults.double(forKey: Key.shadowScale)
+        edgeScale = defaults.double(forKey: Key.edgeScale)
         soundEnabled = defaults.bool(forKey: Key.soundEnabled)
         unfoldDuration = defaults.double(forKey: Key.unfoldDuration)
     }

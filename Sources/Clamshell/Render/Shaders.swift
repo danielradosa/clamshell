@@ -15,6 +15,8 @@ enum Shaders {
         float blurMix;
         float blurLOD;
         float vignette;
+        float edgeSoftness;
+        float cornerRadius;
         float aspect;
     };
 
@@ -128,10 +130,12 @@ enum Shaders {
         float band = exp(-(sweep * sweep) / 0.02);
         color += band * u.sheen * u.fold * 0.35;
 
-        float2 fromMiddle = abs(in.uv - 0.5) * 2.0;
-        float shape = pow(pow(fromMiddle.x, 5.0) + pow(fromMiddle.y, 5.0), 0.2);
-        float feather = mix(0.07, 0.34, levelRamp) * clamp(u.fold * 2.2, 0.0, 1.0);
-        float edgeAlpha = 1.0 - smoothstep(1.0 - feather, 1.0 + feather * 0.15, shape);
+        float radius = u.cornerRadius;
+        float2 q = abs(in.uv - 0.5) - (0.5 - radius);
+        float dist = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+        float feather = u.edgeSoftness * mix(0.35, 1.0, levelRamp)
+                      * clamp(u.fold * 2.2, 0.0, 1.0);
+        float edgeAlpha = 1.0 - smoothstep(-max(feather, 0.0008), 0.0, dist);
 
         float alpha = smoothstep(1.0, 0.94, u.fold) * edgeAlpha;
         return float4(color * alpha, alpha);

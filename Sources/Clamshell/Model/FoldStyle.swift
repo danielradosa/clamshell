@@ -15,6 +15,10 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
 
     var vignette: Double
 
+    var edgeSoftness: Double
+
+    var cornerRadius: Double
+
     var sheen: Double
 
     var curvature: Double
@@ -28,6 +32,8 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
         darkening: 0.35,
         shadowStrength: 0.75,
         vignette: 0.90,
+        edgeSoftness: 0.060,
+        cornerRadius: 0.030,
         sheen: 0.40,
         curvature: 0.22
     )
@@ -41,6 +47,8 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
         darkening: 0.60,
         shadowStrength: 1.00,
         vignette: 1.00,
+        edgeSoftness: 0.055,
+        cornerRadius: 0.028,
         sheen: 0.08,
         curvature: 0.14
     )
@@ -54,6 +62,8 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
         darkening: 0.25,
         shadowStrength: 0.60,
         vignette: 0.75,
+        edgeSoftness: 0.075,
+        cornerRadius: 0.034,
         sheen: 0.22,
         curvature: 0.28
     )
