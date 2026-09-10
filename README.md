@@ -203,6 +203,12 @@ position along the sheet, so the panel reads as a surface receding into depth
 rather than a flat picture with a filter over it. The gradient flattens as the
 lid finishes closing, so nothing is left sharp at the very end.
 
+The panel's own silhouette feathers into the background too, by the same
+gradient. Without that the content softens while the trapezoid keeps a hard
+geometric outline against the black, which gives away that it is a texture on a
+quad. The feather widens with the fold and with position along the sheet, so the
+far edge dissolves while the edge at the hinge stays tight.
+
 Blur width comes from a mip chain rather than a wider kernel. Nine taps spread
 across forty texels sample a comb, not a gaussian, and the gaps show as ghosting
 on anything with strong horizontal structure. Instead the capture is prefiltered
