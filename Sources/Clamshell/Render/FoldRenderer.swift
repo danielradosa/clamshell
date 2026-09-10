@@ -30,6 +30,7 @@ final class FoldRenderer {
         var sheen: Float = 0
         var curvature: Float = 0
         var blurMix: Float = 0
+        var blurLOD: Float = 0
         var aspect: Float = 1
     }
 
@@ -127,7 +128,16 @@ final class FoldRenderer {
         desc.usage = [.renderTarget, .shaderRead]
         desc.storageMode = .private
         blurA = device.makeTexture(descriptor: desc)
-        blurB = device.makeTexture(descriptor: desc)
+
+        // The final blur target carries a full mip chain; the levels are what
+        // supply blur width.
+        let mipped = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: Int(scaled.width), height: Int(scaled.height), mipmapped: true
+        )
+        mipped.usage = [.renderTarget, .shaderRead]
+        mipped.storageMode = .private
+        blurB = device.makeTexture(descriptor: mipped)
     }
 
     /// Copies a texture into a private one this renderer owns, allocating the
@@ -191,24 +201,26 @@ final class FoldRenderer {
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let foldAmount = Float(min(max(fold, 0), 1))
-        // Ramp the radius with fold^1.4 rather than fold^2. Softening should be
-        // underway well before the lid is half shut — it is the part of the
-        // effect the eye actually tracks, and a square puts almost all of it in
-        // the last third of the travel.
-        let radius = Float(style.blurRadius) * pow(foldAmount, 1.4)
+        // A light separable prefilter, one texel wide. Its job is only to stop
+        // the mip chain aliasing on the way down; the width comes from the mips.
+        blurPass(commandBuffer: commandBuffer, from: source, to: blurA,
+                 step: SIMD2(1.0 / Float(blurA.width), 0), radius: 1.0)
+        blurPass(commandBuffer: commandBuffer, from: blurA, to: blurB,
+                 step: SIMD2(0, 1.0 / Float(blurB.height)), radius: 1.0)
 
-        // Separable blur, run as ping-pong pairs. Source feeds the first
-        // horizontal pass and downsamples on the way in; every pass after that
-        // reads what the previous one wrote.
-        var blurInput = source
-        for iteration in 0..<Self.blurIterations {
-            blurPass(commandBuffer: commandBuffer, from: blurInput, to: blurA,
-                     step: SIMD2(1.0 / Float(blurA.width), 0), radius: radius)
-            blurPass(commandBuffer: commandBuffer, from: blurA, to: blurB,
-                     step: SIMD2(0, 1.0 / Float(blurB.height)), radius: radius)
-            blurInput = blurB
-            _ = iteration
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: blurB)
+            blit.endEncoding()
         }
+
+        // Map the style's reach, expressed in screen pixels, onto a mip level.
+        // The chain starts at a quarter resolution and every level doubles the
+        // blur, so the level is the log of the reach in chain texels.
+        let reachInTexels = Float(style.blurRadius) / Float(Self.blurDownsample)
+        let maxLOD = log2(max(reachInTexels, 1))
+        // Slightly sub-linear, so softening is clearly underway early rather
+        // than arriving all at once near the end of the travel.
+        let lod = maxLOD * pow(foldAmount, 0.85)
 
         // Pass 3: the fold itself.
         let pass = MTLRenderPassDescriptor()
@@ -228,10 +240,11 @@ final class FoldRenderer {
             shadowStrength: Float(style.shadowStrength),
             sheen: Float(style.sheen),
             curvature: Float(style.curvature),
-            // Cross-fade to the blurred copy early and finish early, so the
-            // panel is already soft while it still fills enough of the screen
-            // for the softness to be seen.
-            blurMix: min(foldAmount * 2.2, 1.0),
+            // Fully crossed over to the blurred copy by a third of the way in.
+            // Past that the radius alone carries the effect, which is what makes
+            // the last stretch go properly soft rather than merely hazy.
+            blurMix: min(foldAmount * 3.0, 1.0),
+            blurLOD: lod,
             aspect: Float(size.width / max(size.height, 1))
         )
         encoder.setRenderPipelineState(foldPipeline)

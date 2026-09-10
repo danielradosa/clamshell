@@ -20,6 +20,7 @@ enum Shaders {
         float sheen;         // strength of the light sweeping across the panel
         float curvature;     // how much the panel bows out of plane
         float blurMix;       // 0 = fully sharp, 1 = fully blurred
+        float blurLOD;       // mip level to read the blurred copy from
         float aspect;        // width / height, to keep the sheen circular
     };
 
@@ -78,51 +79,53 @@ enum Shaders {
     // The fold itself.
     // ---------------------------------------------------------------------
     //
-    // The panel is a subdivided grid in model space with x and y both in
-    // [-1, 1]. The hinge is the bottom edge, y = -1. Folding rotates the sheet
-    // about that edge, so the hinge stays pinned while the far edge swings away
-    // from the viewer and drops.
+    // The panel always covers the whole screen. This is the part that is easy to
+    // get wrong: the obvious reading of "fold the desktop away" is to rotate the
+    // image into the distance, which leaves it as a shrinking trapezoid on a
+    // black field. That double-counts the perspective. The lid is *physically*
+    // tilting away from the viewer already, and the eye reads that tilt from the
+    // real object. Tilting the image as well shrinks the picture away from the
+    // very softening it is supposed to be showing, and replaces most of the
+    // screen with black.
     //
-    // Perspective is the classic single-term projection: divide x and y by
-    // (1 + z * k). Because z is zero at the hinge, the hinge neither moves nor
-    // scales, which is exactly how a real lid behaves.
+    // So the geometry here is deliberately restrained: a slight keystone, the
+    // top edge drawn in a little as though the sheet were leaning back, plus a
+    // gentle bow. Everything is then scaled so the quad still reaches all four
+    // edges and no background is ever visible. Blur carries the effect.
     vertex VertexOut foldVertex(uint vid [[vertex_id]],
                                 constant float2 *grid [[buffer(0)]],
                                 constant FoldUniforms &u [[buffer(1)]]) {
         float2 p = grid[vid];              // x, y each in [-1, 1]
         float2 uv = float2((p.x + 1.0) * 0.5, 1.0 - (p.y + 1.0) * 0.5);
 
-        // Distance from the hinge, 0 at the bottom edge and 2 at the top.
-        float fromHinge = p.y + 1.0;
+        // 0 at the hinge (bottom edge), 1 at the far edge.
+        float fromHinge = (p.y + 1.0) * 0.5;
 
-        // Rotate about the hinge. 82 degrees at full fold leaves the panel just
-        // shy of edge-on, where it would vanish to a line.
-        float angle = u.fold * 1.43;       // radians, about 82 degrees
-        float rotatedY = fromHinge * cos(angle);
-        float z        = fromHinge * sin(angle);
+        // Keystone: pull the top edge in. Small on purpose.
+        float keystone = u.perspective * u.fold;
+        float narrow = 1.0 - keystone * fromHinge;
 
-        // Bow the sheet slightly out of plane so it reads as a physical panel
-        // rather than a rigid card. Zero at both edges, maximum in the middle.
-        z -= u.curvature * u.fold * sin(fromHinge * M_PI_F * 0.5) * 0.35;
+        float2 pos = float2(p.x * narrow, p.y);
 
-        float3 pos = float3(p.x, rotatedY - 1.0, z);
+        // Bow the sheet out of plane, which after the keystone reads as a panel
+        // flexing rather than a rigid card. Zero at both edges.
+        pos.y += u.curvature * u.fold * sin(fromHinge * M_PI_F) * 0.06;
 
-        // Single-term perspective divide.
-        float w = 1.0 + pos.z * u.perspective;
-        w = max(w, 0.05);                  // never divide through zero
-        float2 projected = pos.xy / w;
+        // Scale so the narrowed top still reaches the screen edge. Without this
+        // the keystone would expose background down both sides.
+        float coverage = 1.0 / max(1.0 - keystone, 0.2);
+        pos *= coverage;
 
         VertexOut out;
-        out.position = float4(projected, 0.0, 1.0);
+        out.position = float4(pos, 0.0, 1.0);
         out.uv = uv;
-        // Normalised distance from the viewer, 0 at the pinned hinge and 1 at the
-        // far edge. Everything that should fall off with distance keys off this.
-        out.depth = clamp(z * 0.5, 0.0, 1.0);
-
-        // Lambert-ish term: as the sheet tilts away from the viewer it catches
-        // less light, so the far edge darkens more than the hinge.
-        float facing = cos(angle);
-        out.shade = mix(1.0, facing, u.fold * 0.65);
+        // Distance from the viewer, 0 at the hinge and 1 at the far edge. Drives
+        // everything that should fall off with depth.
+        out.depth = fromHinge;
+        // The far edge leans away and catches slightly less light. Kept gentle:
+        // a real closing lid stays bright until the backlight cuts, and dimming
+        // it hard just makes the softening harder to see.
+        out.shade = mix(1.0, 1.0 - 0.14 * fromHinge, u.fold);
         return out;
     }
 
@@ -131,37 +134,38 @@ enum Shaders {
                                  texture2d<float> blurred [[texture(1)]],
                                  constant FoldUniforms &u [[buffer(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler mipSampler(filter::linear, mip_filter::linear,
+                                     address::clamp_to_edge);
 
-        // Blur deepens with distance rather than being flat across the panel.
-        // A real lens focused on the near edge throws the receding edge out of
-        // focus first, and matching that is most of what sells the tilt as depth
-        // rather than as a squashed picture.
-        float focus = clamp(u.blurMix * (0.35 + 1.15 * in.depth), 0.0, 1.0);
+        // Blur is the effect. Width comes from the mip chain rather than from a
+        // wider kernel: nine taps spread across forty texels sample a comb, not
+        // a gaussian, and the gaps show up as ghosting of anything with strong
+        // horizontal or vertical structure. Each mip level doubles the blur for
+        // one bilinear fetch, and interpolating between levels keeps the ramp
+        // continuous as the fold progresses.
+        float lod = u.blurLOD * (0.55 + 0.75 * in.depth);
+        float focus = clamp(u.blurMix * (0.55 + 0.75 * in.depth), 0.0, 1.0);
         float3 color = mix(sharp.sample(s, in.uv).rgb,
-                           blurred.sample(s, in.uv).rgb,
+                           blurred.sample(mipSampler, in.uv, level(lod)).rgb,
                            focus);
 
-        // Per-vertex facing term, plus a global pull toward black.
         color *= in.shade;
         color *= 1.0 - u.darkening * u.fold;
 
-        // Shadow gathers along the far edge — the part swinging down toward the
-        // deck, which is both what occludes first and what is furthest away.
-        float shadow = pow(in.depth, 1.6) * u.shadowStrength * u.fold;
+        // Shadow gathering along the far edge, which is both the part swinging
+        // down toward the deck and the part furthest away.
+        float shadow = pow(in.depth, 1.8) * u.shadowStrength * u.fold;
         color *= 1.0 - shadow;
 
-        // A soft band of light rakes across the panel as it tilts. It travels
-        // with the fold so it reads as a reflection moving, not a static gloss,
-        // and it is strongest where the panel is most edge-on to the viewer.
+        // A soft band of light travelling with the fold, so it reads as a
+        // reflection moving across glass rather than a fixed gloss.
         float sweep = in.uv.y - (1.0 - u.fold * 1.7);
-        float band = exp(-(sweep * sweep) / 0.012);
-        color += band * u.sheen * u.fold * 0.55 * (0.4 + 0.6 * in.depth);
+        float band = exp(-(sweep * sweep) / 0.02);
+        color += band * u.sheen * u.fold * 0.35;
 
-        // Fade the very last of the fold to nothing so the panel does not pop
-        // out of existence when it reaches edge-on.
-        float alpha = smoothstep(1.0, 0.94, u.fold);
-
-        return float4(color * alpha, alpha);
+        // Fully opaque throughout. The panel covers the screen, so there is
+        // never anything behind it that should show through.
+        return float4(color, 1.0);
     }
     """
 }

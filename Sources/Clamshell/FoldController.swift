@@ -80,6 +80,20 @@ final class FoldController {
     private var unfoldStart: Date?
     private var unfoldFrom: Double = 1
 
+    /// True from the moment the machine goes to sleep until it is awake and
+    /// usable again.
+    ///
+    /// Without this the effect flickers several times on every lid close. Sleep
+    /// hides the overlay and drops the state back to armed, but the lid is shut
+    /// so the fold is still at its maximum, and the very next watch tick sees
+    /// that and turns the overlay straight back on. Two sleep notifications
+    /// arrive (system and screens), so it happens more than once.
+    private var isSuspended = false
+
+    /// Set when the machine suspends with the fold engaged, meaning an unfold is
+    /// owed once the desktop is visible again. Cleared when it plays or expires.
+    private var pendingUnfold: Date?
+
     /// Previous tick's angle, used to notice the lid coming back up.
     private var lastSeenAngle: Double = AngleSource.restingAngle
 
@@ -175,40 +189,68 @@ final class FoldController {
     private func observeScreenLock() {
         ScreenLock.observe(onLock: { [weak self] in
             Task { @MainActor in
-                self?.trace("screen locked — dropping snapshot and hiding")
-                self?.hideOverlay()
-                self?.snapshot = nil
-                self?.latestFrame = nil
-                self?.state = .idle
+                guard let self else { return }
+                self.trace("screen locked — dropping snapshot and hiding")
+                self.hideOverlay()
+                self.snapshot = nil
+                self.latestFrame = nil
+                self.state = .idle
+                self.isSuspended = true
             }
         }, onUnlock: { [weak self] in
-            Task { @MainActor in self?.angleSource.reset() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.trace("screen unlocked")
+                self.isSuspended = false
+                self.angleSource.reset()
+                // The unfold owed from the lid close plays here instead, once a
+                // live frame lands. It cannot use the pre-sleep snapshot, which
+                // was discarded at lock.
+                if self.pendingUnfold != nil {
+                    self.startCapture()
+                    self.scheduleWatch(interval: 1.0 / 120.0)
+                }
+            }
         })
     }
 
     private func prepareForSleep() {
-        trace("sleeping — overlay down, snapshot kept for the unfold")
+        guard !isSuspended else { return }
+        isSuspended = true
+        let fold = currentFold()
+        if fold > engageFold {
+            // Owe an unfold, valid for a minute. Beyond that this is a machine
+            // that was shut and put away, not a lid being opened again.
+            pendingUnfold = Date().addingTimeInterval(60)
+        }
+        unfoldStart = nil
+        trace(String(format: "sleeping at fold %.3f — suspended, unfold owed: %@",
+                     fold, pendingUnfold != nil ? "yes" : "no"))
         // The overlay must not be left on screen across a sleep, or the desktop
         // is hidden behind a frozen image on wake. The snapshot is deliberately
         // kept: it is what the unfold draws before a fresh stream can deliver.
-        overlay?.hide()
-        escapeHotKey.disarm()
+        hideOverlay()
         state = .armed
         capture.stop()
         latestFrame = nil
     }
 
     private func handleWake() {
-        guard settings.enabled, !isPaused, isCaptureAllowed else { return }
+        guard settings.enabled, !isPaused, isCaptureAllowed else {
+            isSuspended = false
+            return
+        }
         guard !ScreenLock.isLocked else {
-            // Woken to a lock screen. Drop the pre-sleep desktop and wait for
-            // the unlock, which resets the angle spring.
-            trace("wake: locked — discarding snapshot")
+            // Woken to a lock screen. The snapshot is a picture of the desktop
+            // and cannot be shown here, so it goes; the owed unfold survives and
+            // will play against a live frame once the session is unlocked.
+            trace("wake: locked — holding the unfold until unlock")
             snapshot = nil
             state = .idle
             scheduleWatch(interval: 1.0 / 10.0)
             return
         }
+        isSuspended = false
 
         // Start the stream immediately rather than waiting for the watch loop —
         // every millisecond here is a millisecond of the unfold that is missed.
@@ -262,6 +304,26 @@ final class FoldController {
             return
         }
 
+        // Nothing may put the overlay on screen while the machine is suspended
+        // or the session is locked.
+        if isSuspended || ScreenLock.isLocked {
+            if state == .active { transition(to: .armed) }
+            return
+        }
+
+        // An unfold owed from the lid close, waiting on a live frame.
+        if let deadline = pendingUnfold {
+            if Date() > deadline {
+                trace("owed unfold expired")
+                pendingUnfold = nil
+            } else if latestFrame != nil {
+                trace("playing the unfold owed from the lid close")
+                pendingUnfold = nil
+                beginUnfold(from: 1)
+                transition(to: .active)
+            }
+        }
+
         let angle = angleSource.angle
         let engage = settings.engageAngle
         let fold = currentFold()
@@ -277,7 +339,7 @@ final class FoldController {
         let wasShut = lastSeenAngle < FoldCurve.closedAngle + 8
         let isOpening = angle > FoldCurve.closedAngle + 8
         if wasShut, isOpening, unfoldStart == nil, snapshot != nil,
-           !isPaused, settings.enabled, !ScreenLock.isLocked {
+           pendingUnfold == nil, !isSuspended {
             trace(String(format: "lid opening observed (%.1f -> %.1f), starting unfold",
                          lastSeenAngle, angle))
             beginUnfold(from: 1)

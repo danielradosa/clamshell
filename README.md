@@ -156,12 +156,21 @@ the lag a moving average adds.
 from its own capture — otherwise the overlay would be captured, rendered, and
 captured again.
 
-**Rendering.** The desktop texture is drawn on a 48×48 subdivided quad. The
-vertex shader rotates it about the bottom edge and applies a single-term
-perspective divide; because depth is zero at the hinge, the hinge stays pinned
-exactly as a real lid does. The fragment shader mixes between the sharp texture
-and a separably blurred half-resolution copy, with the mix weighted by depth so
-the receding edge falls out of focus first.
+**Rendering.** The panel always covers the whole screen, and blur carries the
+effect. This is the part that is easy to get wrong. The obvious reading of "fold
+the desktop away" is to rotate the image into the distance, which leaves a
+shrinking trapezoid on a black field — and that double-counts the perspective.
+The lid is *physically* tilting away already and the eye reads that from the real
+object; tilting the image too shrinks the picture away from the very softening it
+is meant to be showing. So the geometry is restrained: a slight keystone with the
+top edge drawn in, a gentle bow, and a scale that keeps all four edges covered.
+
+Blur width comes from a mip chain rather than a wider kernel. Nine taps spread
+across forty texels sample a comb, not a gaussian, and the gaps show as ghosting
+on anything with strong horizontal structure. Instead the capture is prefiltered
+into a quarter-resolution texture, mipmapped, and read back at a level that rises
+with the fold — each level doubles the blur for one bilinear fetch, and
+interpolating between levels keeps the ramp continuous.
 
 **The curve.** The mapping from hinge angle to fold progress is a cubic ease-in,
 and the shape is constrained by hardware rather than taste: the panel backlight
