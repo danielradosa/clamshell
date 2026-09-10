@@ -128,7 +128,11 @@ final class OverlayWindow: NSWindow {
 
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
-        let view = MetalView(device: device, colorSpace: screen.colorSpace?.cgColorSpace)
+        // Deliberately not screen.colorSpace: see ScreenCapture.colorSpaceName.
+        // The layer must use the exact space the capture was requested in.
+        let displayID = (screen.deviceDescription[.init("NSScreenNumber")] as? NSNumber)?
+            .uint32Value ?? CGMainDisplayID()
+        let view = MetalView(device: device, colorSpace: ScreenCapture.colorSpace(for: displayID))
         view.frame = CGRect(origin: .zero, size: screen.frame.size)
         view.autoresizingMask = [.width, .height]
         contentView = view
@@ -144,15 +148,38 @@ final class OverlayWindow: NSWindow {
     /// Draws a frame into the layer, then shows the window. Order matters — the
     /// other way round shows black until the first frame lands.
     func show() {
-        guard !isVisible else { return }
+        fadeOut?.cancel()
+        fadeOut = nil
+        guard !isVisible || alphaValue < 1 else { return }
+        alphaValue = 1
         metalView.isRenderingEnabled = true
         metalView.drawNow()
         orderFrontRegardless()
     }
 
+    /// Fades out rather than ordering out on the spot.
+    ///
+    /// By the time this runs the fold is back to nothing, so the overlay is
+    /// showing a copy of the desktop that sits directly on top of the real one.
+    /// Removing a full-screen window at the shielding level makes the window
+    /// server recomposite, and that can drop a frame. Cross-fading two images
+    /// that are already identical hides it completely.
     func hide() {
-        guard isVisible else { return }
-        orderOut(nil)
-        metalView.isRenderingEnabled = false
+        guard isVisible, fadeOut == nil else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            animator().alphaValue = 0
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.orderOut(nil)
+            self.metalView.isRenderingEnabled = false
+            self.alphaValue = 1
+            self.fadeOut = nil
+        }
+        fadeOut = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.13, execute: work)
     }
+
+    private var fadeOut: DispatchWorkItem?
 }

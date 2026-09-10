@@ -11,10 +11,8 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
     let name: String
     let blurb: String
 
-    /// How far the top edge is drawn in, as a fraction of width, at full fold.
-    /// Deliberately small: the lid is physically tilting already, and warping the
-    /// image hard on top of that shrinks it into a black frame instead of
-    /// reading as depth.
+    /// Strength of the perspective divide. Higher reads as a wider-angle lens
+    /// and a more dramatic tilt as the panel swings away.
     var perspective: Double
 
     /// Blur reach at full fold, in screen pixels. Converted to a mip level, so
@@ -24,8 +22,11 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
     /// How far toward black the image is pulled at full fold, 0...1.
     var darkening: Double
 
-    /// Opacity of the soft shadow that gathers along the far edge, 0...1.
+    /// How hard darkness creeps down from the top edge, 0...1.
     var shadowStrength: Double
+
+    /// How hard the corners are pulled to black, 0...1.
+    var vignette: Double
 
     /// Strength of the sheen that sweeps across the panel as it tilts, 0...1.
     var sheen: Double
@@ -37,36 +38,39 @@ struct FoldStyle: Equatable, Identifiable, Sendable {
         id: "satin",
         name: "Satin",
         blurb: "Smooth and glossy, with light raking across the panel.",
-        perspective: 0.14,
+        perspective: 0.62,
         blurRadius: 130,
-        darkening: 0.14,
-        shadowStrength: 0.16,
+        darkening: 0.30,
+        shadowStrength: 0.55,
+        vignette: 0.85,
         sheen: 0.45,
-        curvature: 0.35
+        curvature: 0.20
     )
 
     static let eclipse = FoldStyle(
         id: "eclipse",
         name: "Eclipse",
         blurb: "Deep shadow. The panel falls away into the dark.",
-        perspective: 0.18,
+        perspective: 0.78,
         blurRadius: 96,
-        darkening: 0.38,
-        shadowStrength: 0.40,
+        darkening: 0.55,
+        shadowStrength: 0.80,
+        vignette: 1.0,
         sheen: 0.08,
-        curvature: 0.20
+        curvature: 0.12
     )
 
     static let glacier = FoldStyle(
         id: "glacier",
         name: "Glacier",
         blurb: "Frosted glass. Everything softens before it goes.",
-        perspective: 0.10,
+        perspective: 0.52,
         blurRadius: 260,
-        darkening: 0.08,
-        shadowStrength: 0.10,
+        darkening: 0.22,
+        shadowStrength: 0.40,
+        vignette: 0.65,
         sheen: 0.25,
-        curvature: 0.45
+        curvature: 0.26
     )
 
     static let all: [FoldStyle] = [.satin, .eclipse, .glacier]

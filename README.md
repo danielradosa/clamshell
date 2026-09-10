@@ -156,14 +156,14 @@ the lag a moving average adds.
 from its own capture — otherwise the overlay would be captured, rendered, and
 captured again.
 
-**Rendering.** The panel always covers the whole screen, and blur carries the
-effect. This is the part that is easy to get wrong. The obvious reading of "fold
-the desktop away" is to rotate the image into the distance, which leaves a
-shrinking trapezoid on a black field — and that double-counts the perspective.
-The lid is *physically* tilting away already and the eye reads that from the real
-object; tilting the image too shrinks the picture away from the very softening it
-is meant to be showing. So the geometry is restrained: a slight keystone with the
-top edge drawn in, a gentle bow, and a scale that keeps all four edges covered.
+**Rendering.** The desktop texture is drawn on a 48×48 subdivided quad. The
+vertex shader rotates it about the bottom edge and applies a single-term
+perspective divide; because depth is zero at the hinge, the hinge stays pinned
+exactly as a real lid does. Whatever the panel does not cover stays black, which
+is what gives the effect its sense of the screen falling away. Darkness then
+creeps down from the top edge and in from the corners, weighted so the top two
+corners lead and the bottom two follow — the way a panel tipping backwards
+actually goes.
 
 Blur width comes from a mip chain rather than a wider kernel. Nine taps spread
 across forty texels sample a comb, not a gaussian, and the gaps show as ghosting
@@ -177,6 +177,14 @@ and the shape is constrained by hardware rather than taste: the panel backlight
 cuts out somewhere around 10–15°, so a curve that saves its motion for the last
 few degrees plays most of the animation on a screen that is already dark. A
 quintic is still under 0.1 at 25°, which is why it is not the default.
+
+**Colour.** Capture and the overlay's layer use the same *named* colour space.
+Built-in Apple displays report an unnamed ICC profile, so asking the screen for
+its space yields something that cannot be handed to ScreenCaptureKit. Taking the
+profile for the layer and quietly falling back to sRGB for the capture is worse
+than picking one: the overlay then renders in a different space from the desktop
+it covers, and every colour shifts the instant it is removed, which looks exactly
+like a flash.
 
 **Cost.** Measured on an M2 Air:
 

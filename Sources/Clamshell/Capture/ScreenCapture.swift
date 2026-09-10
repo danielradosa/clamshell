@@ -101,12 +101,27 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { try? await stream.stopCapture() }
     }
 
-    /// The display's colour space name, falling back to sRGB.
+    /// The colour space capture and rendering both use.
+    ///
+    /// It has to be a *named* space, because SCStreamConfiguration is configured
+    /// by name and the overlay's layer has to be given the identical space.
+    /// Built-in Apple displays report an unnamed ICC profile ("Color LCD"), so
+    /// asking the screen for its space yields something that cannot be named and
+    /// cannot be handed to the capture. Taking the profile for the layer and
+    /// quietly falling back to sRGB for the capture is worse than picking one:
+    /// the overlay then renders in a different space from the desktop it is
+    /// covering, and every colour shifts the instant it is taken away — which
+    /// looks exactly like a flash.
     static func colorSpaceName(for displayID: CGDirectDisplayID) -> CFString {
         guard let name = screen(for: displayID)?.colorSpace?.cgColorSpace?.name else {
             return CGColorSpace.sRGB
         }
         return name
+    }
+
+    /// The same space as an object, for the Metal layer.
+    static func colorSpace(for displayID: CGDirectDisplayID) -> CGColorSpace? {
+        CGColorSpace(name: colorSpaceName(for: displayID))
     }
 
     static func screen(for displayID: CGDirectDisplayID) -> NSScreen? {

@@ -21,6 +21,7 @@ enum Shaders {
         float curvature;     // how much the panel bows out of plane
         float blurMix;       // 0 = fully sharp, 1 = fully blurred
         float blurLOD;       // mip level to read the blurred copy from
+        float vignette;      // how hard the corners are pulled to black
         float aspect;        // width / height, to keep the sheen circular
     };
 
@@ -79,53 +80,52 @@ enum Shaders {
     // The fold itself.
     // ---------------------------------------------------------------------
     //
-    // The panel always covers the whole screen. This is the part that is easy to
-    // get wrong: the obvious reading of "fold the desktop away" is to rotate the
-    // image into the distance, which leaves it as a shrinking trapezoid on a
-    // black field. That double-counts the perspective. The lid is *physically*
-    // tilting away from the viewer already, and the eye reads that tilt from the
-    // real object. Tilting the image as well shrinks the picture away from the
-    // very softening it is supposed to be showing, and replaces most of the
-    // screen with black.
+    // The panel is a subdivided grid in model space with x and y both in
+    // [-1, 1]. The hinge is the bottom edge, y = -1. Folding rotates the sheet
+    // about that edge, so the hinge stays pinned while the far edge swings away
+    // from the viewer and drops. Whatever the panel does not cover stays black,
+    // which is what gives the effect its sense of the screen falling away.
     //
-    // So the geometry here is deliberately restrained: a slight keystone, the
-    // top edge drawn in a little as though the sheet were leaning back, plus a
-    // gentle bow. Everything is then scaled so the quad still reaches all four
-    // edges and no background is ever visible. Blur carries the effect.
+    // Perspective is the classic single-term projection: divide x and y by
+    // (1 + z * k). Because z is zero at the hinge, the hinge neither moves nor
+    // scales, which is exactly how a real lid behaves.
     vertex VertexOut foldVertex(uint vid [[vertex_id]],
                                 constant float2 *grid [[buffer(0)]],
                                 constant FoldUniforms &u [[buffer(1)]]) {
         float2 p = grid[vid];              // x, y each in [-1, 1]
         float2 uv = float2((p.x + 1.0) * 0.5, 1.0 - (p.y + 1.0) * 0.5);
 
-        // 0 at the hinge (bottom edge), 1 at the far edge.
-        float fromHinge = (p.y + 1.0) * 0.5;
+        // Distance from the hinge, 0 at the bottom edge and 2 at the top.
+        float fromHinge = p.y + 1.0;
 
-        // Keystone: pull the top edge in. Small on purpose.
-        float keystone = u.perspective * u.fold;
-        float narrow = 1.0 - keystone * fromHinge;
+        // Rotate about the hinge. 82 degrees at full fold leaves the panel just
+        // shy of edge-on, where it would vanish to a line.
+        float angle = u.fold * 1.43;       // radians, about 82 degrees
+        float rotatedY = fromHinge * cos(angle);
+        float z        = fromHinge * sin(angle);
 
-        float2 pos = float2(p.x * narrow, p.y);
+        // Bow the sheet slightly out of plane so it reads as a physical panel
+        // rather than a rigid card. Zero at both edges, maximum in the middle.
+        z -= u.curvature * u.fold * sin(fromHinge * M_PI_F * 0.5) * 0.35;
 
-        // Bow the sheet out of plane, which after the keystone reads as a panel
-        // flexing rather than a rigid card. Zero at both edges.
-        pos.y += u.curvature * u.fold * sin(fromHinge * M_PI_F) * 0.06;
+        float3 pos = float3(p.x, rotatedY - 1.0, z);
 
-        // Scale so the narrowed top still reaches the screen edge. Without this
-        // the keystone would expose background down both sides.
-        float coverage = 1.0 / max(1.0 - keystone, 0.2);
-        pos *= coverage;
+        // Single-term perspective divide.
+        float w = 1.0 + pos.z * u.perspective;
+        w = max(w, 0.05);                  // never divide through zero
+        float2 projected = pos.xy / w;
 
         VertexOut out;
-        out.position = float4(pos, 0.0, 1.0);
+        out.position = float4(projected, 0.0, 1.0);
         out.uv = uv;
-        // Distance from the viewer, 0 at the hinge and 1 at the far edge. Drives
-        // everything that should fall off with depth.
-        out.depth = fromHinge;
-        // The far edge leans away and catches slightly less light. Kept gentle:
-        // a real closing lid stays bright until the backlight cuts, and dimming
-        // it hard just makes the softening harder to see.
-        out.shade = mix(1.0, 1.0 - 0.14 * fromHinge, u.fold);
+        // 0 at the pinned hinge, 1 at the far edge. Everything that falls off
+        // with distance keys off this.
+        out.depth = clamp(z * 0.5, 0.0, 1.0);
+
+        // As the sheet tilts away it catches less light, so the far edge darkens
+        // more than the hinge.
+        float facing = cos(angle);
+        out.shade = mix(1.0, facing, u.fold * 0.65);
         return out;
     }
 
@@ -152,10 +152,19 @@ enum Shaders {
         color *= in.shade;
         color *= 1.0 - u.darkening * u.fold;
 
-        // Shadow gathering along the far edge, which is both the part swinging
-        // down toward the deck and the part furthest away.
-        float shadow = pow(in.depth, 1.8) * u.shadowStrength * u.fold;
-        color *= 1.0 - shadow;
+        // Darkness creeps in from the top as the panel leans away, so the far
+        // edge is gone before the near edge has finished going.
+        float topFall = pow(in.depth, 1.5) * u.shadowStrength * u.fold;
+        color *= 1.0 - topFall;
+
+        // Corners go first. Measured from the centre with the vertical weighted
+        // more heavily, so the top two corners lead and the bottom two follow —
+        // which is what a panel tipping backwards actually does.
+        float2 fromCentre = in.uv - 0.5;
+        fromCentre.y -= 0.12;
+        float corner = clamp(dot(fromCentre * float2(1.35, 1.75),
+                                 fromCentre * float2(1.35, 1.75)) * 2.4, 0.0, 1.0);
+        color *= 1.0 - clamp(corner * u.vignette * u.fold, 0.0, 1.0);
 
         // A soft band of light travelling with the fold, so it reads as a
         // reflection moving across glass rather than a fixed gloss.
@@ -163,9 +172,10 @@ enum Shaders {
         float band = exp(-(sweep * sweep) / 0.02);
         color += band * u.sheen * u.fold * 0.35;
 
-        // Fully opaque throughout. The panel covers the screen, so there is
-        // never anything behind it that should show through.
-        return float4(color, 1.0);
+        // Fade the last of the travel to nothing so the panel does not pop out
+        // of existence when it reaches edge-on.
+        float alpha = smoothstep(1.0, 0.94, u.fold);
+        return float4(color * alpha, alpha);
     }
     """
 }

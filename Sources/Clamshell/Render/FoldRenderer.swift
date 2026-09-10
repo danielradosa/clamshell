@@ -31,6 +31,7 @@ final class FoldRenderer {
         var curvature: Float = 0
         var blurMix: Float = 0
         var blurLOD: Float = 0
+        var vignette: Float = 0
         var aspect: Float = 1
     }
 
@@ -245,6 +246,7 @@ final class FoldRenderer {
             // the last stretch go properly soft rather than merely hazy.
             blurMix: min(foldAmount * 3.0, 1.0),
             blurLOD: lod,
+            vignette: Float(style.vignette),
             aspect: Float(size.width / max(size.height, 1))
         )
         encoder.setRenderPipelineState(foldPipeline)
