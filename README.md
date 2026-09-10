@@ -195,6 +195,14 @@ proportional to travel cubed stays near zero for most of the close and arrives
 entirely in the last few degrees, by which point the backlight is already going.
 Driven by travel instead, softening is well underway at 70°.
 
+Blur is also graded along the panel rather than applied evenly. The edge at the
+hinge is nearest the viewer and stays comparatively crisp; softening builds
+toward the far edge, which is both furthest away and leaning hardest out of
+frame. Both the mip level and the amount of blurred copy mixed in ramp with
+position along the sheet, so the panel reads as a surface receding into depth
+rather than a flat picture with a filter over it. The gradient flattens as the
+lid finishes closing, so nothing is left sharp at the very end.
+
 Blur width comes from a mip chain rather than a wider kernel. Nine taps spread
 across forty texels sample a comb, not a gaussian, and the gaps show as ghosting
 on anything with strong horizontal structure. Instead the capture is prefiltered

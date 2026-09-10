@@ -27,6 +27,7 @@ enum Shaders {
         float4 position [[position]];
         float2 uv;
         float  depth;
+        float  along;
         float  shade;
     };
 
@@ -86,9 +87,10 @@ enum Shaders {
         out.position = float4(projected, 0.0, 1.0);
         out.uv = uv;
         out.depth = clamp(z * 0.5, 0.0, 1.0);
+        out.along = fromHinge * 0.5;
 
         float facing = cos(angle);
-        out.shade = mix(1.0, facing, u.fold * 0.65);
+        out.shade = mix(1.0, facing, u.fold * 0.65) * (1.0 - u.fold * 0.22 * (fromHinge * 0.5));
         return out;
     }
 
@@ -100,8 +102,12 @@ enum Shaders {
         constexpr sampler mipSampler(filter::linear, mip_filter::linear,
                                      address::clamp_to_edge);
 
-        float lod = u.blurLOD * (0.55 + 0.75 * in.depth);
-        float focus = clamp(u.blurMix, 0.0, 1.0);
+        float along = clamp(in.along, 0.0, 1.0);
+        float flatten = u.fold * u.fold;
+        float levelRamp = mix(pow(along, 1.5), 1.0, flatten);
+        float mixRamp = mix(smoothstep(0.0, 0.45, along), 1.0, flatten);
+        float lod = u.blurLOD * levelRamp;
+        float focus = clamp(u.blurMix * mixRamp, 0.0, 1.0);
         float3 color = mix(sharp.sample(s, in.uv).rgb,
                            blurred.sample(mipSampler, in.uv, level(lod)).rgb,
                            focus);
@@ -109,7 +115,7 @@ enum Shaders {
         color *= in.shade;
         color *= 1.0 - u.darkening * u.fold;
 
-        float topFall = pow(in.depth, 1.5) * u.shadowStrength * u.fold;
+        float topFall = pow(in.along, 1.6) * u.shadowStrength * u.fold;
         color *= 1.0 - topFall;
 
         float2 fromCentre = in.uv - 0.5;
