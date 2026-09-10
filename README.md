@@ -1,6 +1,12 @@
 # Clamshell
 
-Your desktop folds away as you close the lid.
+**Your desktop folds away as you close the lid. Free, open source, forever.**
+
+A free alternative to [Bendy](https://trybendy.app/), which does the same trick
+for $4.99. No license keys, no seat limits, no upgrade tier, no account, no
+telemetry, no nag screens. MIT licensed — take it, fork it, ship it.
+
+Vibecoded with love. 🖤
 
 Clamshell reads your MacBook's hinge angle from the built-in lid angle sensor and
 bends a live copy of your screen in 3D to match — tilting it back on the hinge,
@@ -275,13 +281,15 @@ alternatives are documented in place.
 
 ## Relationship to Bendy
 
-[Bendy](https://trybendy.app/) is a paid closed-source app with a similar idea,
-and it is what prompted this one. Clamshell is an independent implementation
-written from public documentation, Apple's own APIs and existing open-source work
-on the lid angle sensor. No Bendy code, assets, artwork or copy were examined,
-decompiled or reused, and the two share no names for anything user-facing.
+[Bendy](https://trybendy.app/) is a paid closed-source app with the same idea, and
+it is what prompted this one. Clamshell is an independent implementation written
+from public documentation, Apple's own APIs and existing open-source work on the
+lid angle sensor. No Bendy code, assets or artwork were examined, decompiled or
+reused, and the two share no names for anything user-facing.
 
-If you want the polished commercial product, buy theirs.
+Nothing here is a knock on them — building and supporting a Mac app is real work
+and charging for it is fair. This one is simply free, and the source is right
+here, so nobody has to pay for a lid animation who would rather not.
 
 ## Prior art
 
