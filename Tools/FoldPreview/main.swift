@@ -137,8 +137,8 @@ var written = 0
 for style in FoldStyle.all {
     for fold in folds {
         let target = device.makeTexture(descriptor: targetDescriptor)!
-        renderer.render(source: source, fold: fold, style: style,
-                        into: target, waitForCompletion: true)
+        renderer.render(source: source, fold: fold, softness: pow(fold, 1.0 / 3.0),
+                        style: style, into: target, waitForCompletion: true)
         let name = String(format: "%@-fold-%02d.png", style.id, Int(fold * 100))
         writePNG(target, to: outputDirectory.appendingPathComponent(name))
         written += 1
@@ -159,8 +159,8 @@ sheet.fill(CGRect(x: 0, y: 0, width: cellW * columns, height: cellH * rows))
 for (rowIndex, style) in FoldStyle.all.enumerated() {
     for (columnIndex, fold) in folds.enumerated() {
         let target = device.makeTexture(descriptor: targetDescriptor)!
-        renderer.render(source: source, fold: fold, style: style,
-                        into: target, waitForCompletion: true)
+        renderer.render(source: source, fold: fold, softness: pow(fold, 1.0 / 3.0),
+                        style: style, into: target, waitForCompletion: true)
         let bytesPerRow = target.width * 4
         var data = [UInt8](repeating: 0, count: bytesPerRow * target.height)
         target.getBytes(&data, bytesPerRow: bytesPerRow,
@@ -208,14 +208,14 @@ sourceDescriptor.storageMode = .private
 let benchSource = device.makeTexture(descriptor: sourceDescriptor)!
 
 for _ in 0..<5 {
-    renderer.render(source: benchSource, fold: 0.5, style: .glacier,
-                    into: benchTarget, waitForCompletion: true)
+    renderer.render(source: benchSource, fold: 0.5, softness: 0.8,
+                    style: .glacier, into: benchTarget, waitForCompletion: true)
 }
 
 let iterations = 120
 let benchStart = Date()
 for i in 0..<iterations {
-    renderer.render(source: benchSource, fold: Double(i) / Double(iterations),
+    renderer.render(source: benchSource, fold: Double(i) / Double(iterations), softness: 0.8,
                     style: .glacier, into: benchTarget, waitForCompletion: true)
 }
 let elapsed = Date().timeIntervalSince(benchStart)

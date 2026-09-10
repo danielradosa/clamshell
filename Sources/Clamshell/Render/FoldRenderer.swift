@@ -139,15 +139,19 @@ final class FoldRenderer {
         return destination
     }
 
-    func render(source: MTLTexture, fold: Double, style: FoldStyle, drawable: CAMetalDrawable) {
-        encode(source: source, fold: fold, style: style, target: drawable.texture) { buffer in
+    func render(source: MTLTexture, fold: Double, softness: Double,
+                style: FoldStyle, drawable: CAMetalDrawable) {
+        encode(source: source, fold: fold, softness: softness,
+               style: style, target: drawable.texture) { buffer in
             buffer.present(drawable)
         }
     }
 
-    func render(source: MTLTexture, fold: Double, style: FoldStyle,
-                into target: MTLTexture, waitForCompletion: Bool = false) {
-        encode(source: source, fold: fold, style: style, target: target) { buffer in
+    func render(source: MTLTexture, fold: Double, softness: Double? = nil,
+                style: FoldStyle, into target: MTLTexture,
+                waitForCompletion: Bool = false) {
+        encode(source: source, fold: fold, softness: softness ?? fold,
+               style: style, target: target) { buffer in
             if waitForCompletion {
                 buffer.commit()
                 buffer.waitUntilCompleted()
@@ -155,14 +159,16 @@ final class FoldRenderer {
         }
     }
 
-    private func encode(source: MTLTexture, fold: Double, style: FoldStyle,
-                        target: MTLTexture, finish: (MTLCommandBuffer) -> Void) {
+    private func encode(source: MTLTexture, fold: Double, softness: Double,
+                        style: FoldStyle, target: MTLTexture,
+                        finish: (MTLCommandBuffer) -> Void) {
         let size = CGSize(width: target.width, height: target.height)
         ensureBlurTextures(for: size)
         guard let blurA, let blurB,
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let foldAmount = Float(min(max(fold, 0), 1))
+        let softAmount = Float(min(max(softness, 0), 1))
         blurPass(commandBuffer: commandBuffer, from: source, to: blurA,
                  step: SIMD2(1.0 / Float(blurA.width), 0), radius: 1.0)
         blurPass(commandBuffer: commandBuffer, from: blurA, to: blurB,
@@ -175,7 +181,7 @@ final class FoldRenderer {
 
         let reachInTexels = Float(style.blurRadius) / Float(Self.blurDownsample)
         let maxLOD = log2(max(reachInTexels, 1))
-        let lod = maxLOD * pow(foldAmount, 0.85)
+        let lod = maxLOD * softAmount
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -191,7 +197,7 @@ final class FoldRenderer {
             shadowStrength: Float(style.shadowStrength),
             sheen: Float(style.sheen),
             curvature: Float(style.curvature),
-            blurMix: min(foldAmount * 3.0, 1.0),
+            blurMix: min(softAmount * 2.5, 1.0),
             blurLOD: lod,
             vignette: Float(style.vignette),
             aspect: Float(size.width / max(size.height, 1))

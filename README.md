@@ -188,6 +188,13 @@ creeps down from the top edge and in from the corners, weighted so the top two
 corners lead and the bottom two follow — the way a panel tipping backwards
 actually goes.
 
+Blur is driven by raw lid travel, not by the fold amount. That distinction is
+the whole effect. Fold progress is a cubic of the travel, which is right for the
+geometry — a lid that is merely tilted should look untouched — but blur
+proportional to travel cubed stays near zero for most of the close and arrives
+entirely in the last few degrees, by which point the backlight is already going.
+Driven by travel instead, softening is well underway at 70°.
+
 Blur width comes from a mip chain rather than a wider kernel. Nine taps spread
 across forty texels sample a comb, not a gaussian, and the gaps show as ghosting
 on anything with strong horizontal structure. Instead the capture is prefiltered

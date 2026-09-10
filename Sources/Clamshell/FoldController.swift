@@ -30,6 +30,8 @@ final class FoldController {
 
     private let engageFold: Double = 0.004
     private let clearFold: Double = 0.0004
+    private let engageTravel: Double = 0.006
+    private let clearTravel: Double = 0.002
 
     private var unfoldDuration: TimeInterval { settings.unfoldDuration }
 
@@ -251,11 +253,13 @@ final class FoldController {
         case .armed:
             if angle > engage + armMargin + disarmHysteresis && !closingFast {
                 transition(to: .idle)
-            } else if fold > engageFold, hasSomethingToDraw {
+            } else if FoldCurve.travel(angle: angle, engageAngle: engage) > engageTravel,
+                      hasSomethingToDraw {
                 transition(to: .active)
             }
         case .active:
-            if fold < clearFold, unfoldStart == nil { transition(to: .armed) }
+            if FoldCurve.travel(angle: angle, engageAngle: engage) < clearTravel,
+               unfoldStart == nil { transition(to: .armed) }
         }
 
         trackClearSound(fold: fold)
@@ -326,6 +330,13 @@ final class FoldController {
         return unfoldFrom + (sensorFold - unfoldFrom) * eased
     }
 
+    private func currentSoftness(fold: Double) -> Double {
+        if unfoldStart != nil {
+            return FoldCurve.softness(forTravel: pow(max(fold, 0), 1.0 / 3.0))
+        }
+        return FoldCurve.softness(angle: angleSource.angle, engageAngle: settings.engageAngle)
+    }
+
     private func beginUnfold(from fold: Double) {
         unfoldFrom = max(fold, 0.85)
         unfoldStart = Date()
@@ -391,8 +402,10 @@ final class FoldController {
     private func drawFrame(into layer: CAMetalLayer) {
         guard let source = latestFrame?.texture ?? snapshot else { return }
         let fold = currentFold()
+        let softness = currentSoftness(fold: fold)
         guard let drawable = layer.nextDrawable() else { return }
-        renderer.render(source: source, fold: fold, style: settings.style, drawable: drawable)
+        renderer.render(source: source, fold: fold, softness: softness,
+                        style: settings.style, drawable: drawable)
 
         if let live = latestFrame?.texture, fold > 0.25 {
             let hadSnapshot = snapshot != nil

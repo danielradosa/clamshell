@@ -101,7 +101,7 @@ enum Shaders {
                                      address::clamp_to_edge);
 
         float lod = u.blurLOD * (0.55 + 0.75 * in.depth);
-        float focus = clamp(u.blurMix * (0.55 + 0.75 * in.depth), 0.0, 1.0);
+        float focus = clamp(u.blurMix, 0.0, 1.0);
         float3 color = mix(sharp.sample(s, in.uv).rgb,
                            blurred.sample(mipSampler, in.uv, level(lod)).rgb,
                            focus);
