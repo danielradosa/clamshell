@@ -4,18 +4,15 @@ import Combine
 
 /// Coordinates the sensor, the capture stream, the renderer and the overlay.
 ///
-/// The controller moves between three states so that an app which is idle most
-/// of the day costs almost nothing:
+/// Three states keep an app that is idle most of the day close to free:
 ///
 ///   - `idle`    the lid is open well past the engage angle. Poll the sensor a
 ///               few times a second and nothing else.
-///   - `armed`   the lid has come down near the engage angle. Start the capture
-///               stream now, because starting one takes long enough that doing
-///               it at the moment of engagement would drop the first frames.
+///   - `armed`   the lid has come down near the engage angle, or has started
+///               moving. Start the capture stream now, because starting one
+///               takes long enough that doing it at the moment of engagement
+///               would drop the opening frames.
 ///   - `active`  the fold is visible. Overlay on screen, rendering every frame.
-///
-/// Arming and disarming use different thresholds so a lid held right at the
-/// boundary does not flap the capture stream on and off.
 @MainActor
 final class FoldController {
 
@@ -35,29 +32,50 @@ final class FoldController {
     private var wasEngaged = false
     private let escapeHotKey = EscapeHotKey()
 
+    /// A private copy of the last desktop frame, owned by us.
+    ///
+    /// This is what makes the opening animation possible. Closing the lid puts
+    /// the Mac to sleep, which tears down the capture stream; on wake the
+    /// display lights up around 10 to 15 degrees, well before a fresh stream can
+    /// be started and deliver a frame. Without something to draw, the whole
+    /// unfold would be missed and the screen would simply snap on. The desktop
+    /// has not changed during sleep, so the pre-sleep frame is not merely a
+    /// stand-in — it is the correct image.
+    private var snapshot: MTLTexture?
+
     /// How far above the engage angle the capture stream spins up.
     ///
-    /// Kept deliberately tight. A generous margin would leave the capture stream
-    /// running all day for anyone who works with the lid at a shallow angle,
-    /// which is the common case. Motion arming below covers the lead time
-    /// instead.
+    /// Kept tight. A generous margin would leave the capture stream running all
+    /// day for anyone who works with the lid at a shallow angle, which is the
+    /// common case. Motion arming below covers the lead time instead.
     private let armMargin: Double = 15
 
     /// Closing speed, in degrees per second, that arms the stream regardless of
-    /// angle. Hands close a lid an order of magnitude faster than this, so it
-    /// fires as soon as the lid starts moving and buys the stream time to start.
+    /// angle. Hands close a lid an order of magnitude faster than this.
     private let armVelocity: Double = 15
 
     /// Extra margin before disarming, to stop the stream flapping.
     private let disarmHysteresis: Double = 12
 
+    /// Fold at which the overlay comes on screen, and the lower one at which it
+    /// goes away again.
+    ///
+    /// Two different values on purpose. A single threshold sits exactly where
+    /// the reading is noisiest, so the overlay was being shown and hidden
+    /// repeatedly as the value crossed back and forth — visible as a flicker
+    /// right at the moment the effect should be settling.
+    private let engageFold: Double = 0.004
+    private let clearFold: Double = 0.0004
+
     /// Set when the user pauses from the menu bar or with Escape.
     var isPaused = false { didSet { if isPaused { teardown() } else { angleSource.reset() } } }
+
+    /// Set by the app delegate once the permission check has actually answered.
+    var isCaptureAllowed = false
 
     var hasSensor: Bool { angleSource.hasSensor }
     var currentRawAngle: Double { angleSource.rawAngle }
 
-    /// Drives the preview in Settings without needing a second sensor reader.
     @Published private(set) var previewFold: Double = 0
 
     init() throws {
@@ -71,13 +89,12 @@ final class FoldController {
             Task { @MainActor in self?.latestFrame = frame }
         }
         capture.onFailure = { [weak self] _ in
-            Task { @MainActor in self?.teardown() }
+            Task { @MainActor in self?.handleCaptureFailure() }
         }
 
         // A Mac with no lid sensor must sit still by default. Falling back to
         // the looping demo here would mean an app that throws a fullscreen
-        // overlay across the screen every few seconds, forever. The demo is
-        // reachable on request instead, from the menu or from Settings.
+        // overlay across the screen every few seconds, forever.
         if !angleSource.hasSensor {
             angleSource.mode = .manual(AngleSource.restingAngle)
         }
@@ -86,13 +103,114 @@ final class FoldController {
             .sink { [weak self] enabled in if !enabled { self?.teardown() } }
             .store(in: &cancellables)
 
+        observeSleepAndWake()
+        observeScreenLock()
         startWatching()
     }
 
-    /// Switches the angle source, used by the Settings preview.
     func setMode(_ mode: AngleSource.Mode) {
         angleSource.mode = mode
         angleSource.reset()
+    }
+
+    /// Plays one close-and-open sweep. Used from the menu so the effect can be
+    /// seen on demand, including on Macs with no sensor.
+    func playDemo() {
+        angleSource.mode = .demo
+        angleSource.reset(to: AngleSource.restingAngle)
+        demoDeadline = Date().addingTimeInterval(3.6)
+    }
+
+    private var demoDeadline: Date?
+
+    private func endDemoIfFinished() {
+        guard let deadline = demoDeadline, Date() >= deadline else { return }
+        demoDeadline = nil
+        angleSource.mode = angleSource.hasSensor ? .sensor : .manual(AngleSource.restingAngle)
+        angleSource.reset()
+    }
+
+    // MARK: - Sleep and wake
+
+    /// Closing the lid sleeps the Mac, so the interesting half of the effect —
+    /// the unfold as the lid opens — happens across a sleep boundary.
+    private func observeSleepAndWake() {
+        let center = NSWorkspace.shared.notificationCenter
+
+        // Closing the lid does not always sleep the whole Mac — an app holding a
+        // power assertion, or an external display, can leave the system awake
+        // with only the panel switched off. Both paths have to be handled, or
+        // the unfold works in one case and not the other.
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.prepareForSleep() }
+            }
+        }
+        // Both fire on lid-open; whichever lands first does the work.
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.handleWake() }
+            }
+        }
+    }
+
+    /// The overlay must never be on screen over a lock screen, and the snapshot
+    /// of the desktop must not survive a lock.
+    private func observeScreenLock() {
+        ScreenLock.observe(onLock: { [weak self] in
+            Task { @MainActor in
+                self?.trace("screen locked — dropping snapshot and hiding")
+                self?.hideOverlay()
+                self?.snapshot = nil
+                self?.latestFrame = nil
+                self?.state = .idle
+            }
+        }, onUnlock: { [weak self] in
+            Task { @MainActor in self?.angleSource.reset() }
+        })
+    }
+
+    private func prepareForSleep() {
+        trace("sleeping — overlay down, snapshot kept for the unfold")
+        // The overlay must not be left on screen across a sleep, or the desktop
+        // is hidden behind a frozen image on wake. The snapshot is deliberately
+        // kept: it is what the unfold draws before a fresh stream can deliver.
+        overlay?.hide()
+        escapeHotKey.disarm()
+        state = .armed
+        capture.stop()
+        latestFrame = nil
+    }
+
+    private func handleWake() {
+        guard settings.enabled, !isPaused, isCaptureAllowed else { return }
+        guard !ScreenLock.isLocked else {
+            // Woken to a lock screen. Drop the pre-sleep desktop and wait for
+            // the unlock, which resets the angle spring.
+            trace("wake: locked — discarding snapshot")
+            snapshot = nil
+            state = .idle
+            scheduleWatch(interval: 1.0 / 10.0)
+            return
+        }
+
+        // Start the stream immediately rather than waiting for the watch loop —
+        // every millisecond here is a millisecond of the unfold that is missed.
+        startCapture()
+
+        // Jump the spring to where the lid actually is. Letting it ease over
+        // from its pre-sleep position would play a fold the user never made.
+        angleSource.reset()
+        scheduleWatch(interval: 1.0 / 120.0)
+
+        let fold = FoldCurve.progress(angle: angleSource.angle, engageAngle: settings.engageAngle)
+        trace("wake: angle \(String(format: "%.1f", angleSource.angle)) fold \(String(format: "%.3f", fold)) snapshot \(snapshot != nil)")
+        if fold > engageFold, snapshot != nil {
+            state = .active
+            showOverlay()
+        } else {
+            state = .armed
+        }
     }
 
     // MARK: - The watch loop
@@ -114,6 +232,7 @@ final class FoldController {
     private func watchTick() {
         angleSource.tick()
         endDemoIfFinished()
+
         guard settings.enabled, !isPaused else {
             if state != .idle { teardown() }
             return
@@ -132,52 +251,52 @@ final class FoldController {
         case .armed:
             if angle > engage + armMargin + disarmHysteresis && !closingFast {
                 transition(to: .idle)
-            } else if fold > 0.001, canPresentOverlay {
+            } else if fold > engageFold, hasSomethingToDraw {
                 transition(to: .active)
             }
         case .active:
-            if fold <= 0.001 { transition(to: .armed) }
+            if fold < clearFold { transition(to: .armed) }
         }
 
-        // Rendering is driven by the overlay's display link while active; this
-        // loop only keeps the angle spring warm and watches for state changes.
         trackClearSound(fold: fold)
+    }
+
+    /// Set by CLAMSHELL_TRACE=1. Prints state changes and overlay lifecycle to
+    /// stderr, which is the only way to confirm the overlay is no longer being
+    /// rebuilt on every engagement without watching the screen.
+    private static let isTracing = ProcessInfo.processInfo.environment["CLAMSHELL_TRACE"] == "1"
+
+    private func trace(_ message: String) {
+        guard Self.isTracing else { return }
+        FileHandle.standardError.write(Data("[clamshell] \(message)\n".utf8))
     }
 
     private func transition(to next: State) {
         guard next != state else { return }
         let previous = state
         state = next
+        trace("state \(previous) -> \(next)")
 
         switch next {
         case .idle:
-            tearDownOverlay()
+            hideOverlay()
             capture.stop()
             latestFrame = nil
             scheduleWatch(interval: 1.0 / 10.0)
 
         case .armed:
             if previous == .idle { startCapture() }
-            if previous == .active { tearDownOverlay() }
+            if previous == .active { hideOverlay() }
             scheduleWatch(interval: 1.0 / 120.0)
 
         case .active:
-            presentOverlay()
+            showOverlay()
             scheduleWatch(interval: 1.0 / 120.0)
         }
     }
 
-    /// The overlay is opaque black until its Metal layer has presented a
-    /// drawable, so putting it on screen before the first captured frame lands
-    /// would black out the display for a frame or two. Wait for pixels.
-    private var canPresentOverlay: Bool {
-        latestFrame != nil
-    }
-
-    /// Set by the app delegate once the permission check has actually answered.
-    /// Nothing tries to capture before then, so a launch with no permission is
-    /// quiet rather than a stream of failures.
-    var isCaptureAllowed = false
+    /// Anything at all to render — a live frame, or the pre-sleep snapshot.
+    private var hasSomethingToDraw: Bool { latestFrame != nil || snapshot != nil }
 
     private func startCapture() {
         guard isCaptureAllowed else { return }
@@ -185,45 +304,55 @@ final class FoldController {
         Task { try? await capture.start(on: displayID) }
     }
 
+    private func handleCaptureFailure() {
+        // The stream dies whenever the panel switches off, which is exactly the
+        // moment before the unfold needs to be drawn. Drop the live frame, keep
+        // the snapshot.
+        trace("capture stream ended")
+        latestFrame = nil
+        if state == .active { transition(to: .armed) }
+    }
+
     private func displayIDForOverlay() -> CGDirectDisplayID {
-        // The built-in display is the one with a lid, so prefer it. On a desktop
-        // Mac in demo mode, fall back to the main screen.
-        let screen = NSScreen.screens.first { $0.localizedName.contains("Built-in") } ?? NSScreen.main
+        // The built-in display is the one with a lid, so prefer it.
+        let screen = builtInScreen
         let number = screen?.deviceDescription[.init("NSScreenNumber")] as? NSNumber
         return number?.uint32Value ?? CGMainDisplayID()
     }
 
+    private var builtInScreen: NSScreen? {
+        NSScreen.screens.first { $0.localizedName.contains("Built-in") } ?? NSScreen.main
+    }
+
     // MARK: - Overlay
 
-    /// Plays one close-and-open sweep, then settles back. Used from the menu so
-    /// the effect can be seen on demand, including on Macs with no sensor.
-    func playDemo() {
-        angleSource.mode = .demo
-        angleSource.reset(to: AngleSource.restingAngle)
-        demoDeadline = Date().addingTimeInterval(3.6)
-    }
-
-    private var demoDeadline: Date?
-
-    private func endDemoIfFinished() {
-        guard let deadline = demoDeadline, Date() >= deadline else { return }
-        demoDeadline = nil
-        angleSource.mode = angleSource.hasSensor ? .sensor : .manual(AngleSource.restingAngle)
-        angleSource.reset()
-    }
-
-    private func presentOverlay() {
-        guard overlay == nil else { return }
-        let screen = NSScreen.screens.first { $0.localizedName.contains("Built-in") } ?? NSScreen.main
-        guard let screen else { return }
-
+    /// The window is built once and kept. Rebuilding it per engagement made the
+    /// effect flicker and cost a frame of black every time it appeared.
+    private func ensureOverlay() -> OverlayWindow? {
+        if let overlay { return overlay }
+        guard let screen = builtInScreen else { return nil }
         let window = OverlayWindow(screen: screen, device: device)
         window.metalView.onFrame = { [weak self] layer in
-            Task { @MainActor in self?.drawFrame(into: layer) }
+            MainActor.assumeIsolated { self?.drawFrame(into: layer) }
         }
-        window.present()
         overlay = window
+        trace("overlay WINDOW CREATED (should happen exactly once)")
+        return window
+    }
 
+    private func showOverlay() {
+        // Last line of defence. The lock notification should already have
+        // cleared everything, but the overlay draws desktop contents and must
+        // not appear over a lock screen under any circumstance.
+        guard !ScreenLock.isLocked else {
+            trace("refusing to show overlay: screen is locked")
+            snapshot = nil
+            state = .armed
+            return
+        }
+        guard let overlay = ensureOverlay() else { return }
+        overlay.show()
+        trace("overlay shown")
         // Escape pauses while the fold is on screen, and only while it is.
         escapeHotKey.arm { [weak self] in
             guard let self, !self.isPaused else { return }
@@ -231,27 +360,35 @@ final class FoldController {
         }
     }
 
-    private func tearDownOverlay() {
+    private func hideOverlay() {
         escapeHotKey.disarm()
-        overlay?.metalView.onFrame = nil
-        overlay?.orderOut(nil)
-        overlay = nil
+        if overlay?.isVisible == true { trace("overlay hidden") }
+        overlay?.hide()
     }
 
     private func drawFrame(into layer: CAMetalLayer) {
-        guard state == .active, let frame = latestFrame else { return }
-        // The angle spring is advanced by the watch timer, which runs at 120 Hz
-        // while active. Ticking it again here would resample it with a fraction
-        // of a frame's dt and skew the closing-velocity estimate.
+        // Prefer a live frame; fall back to the snapshot, which is what carries
+        // the unfold immediately after a wake.
+        guard let source = latestFrame?.texture ?? snapshot else { return }
         let fold = FoldCurve.progress(angle: angleSource.angle, engageAngle: settings.engageAngle)
         guard let drawable = layer.nextDrawable() else { return }
-        renderer.render(source: frame.texture, fold: fold, style: settings.style, drawable: drawable)
+        renderer.render(source: source, fold: fold, style: settings.style, drawable: drawable)
+
+        // Keep the snapshot current while the lid is closing, so whatever the
+        // screen looked like just before sleep is what unfolds on wake.
+        if let live = latestFrame?.texture, fold > 0.25 {
+            let hadSnapshot = snapshot != nil
+            snapshot = renderer.copy(live, into: snapshot)
+            if !hadSnapshot, snapshot != nil {
+                trace("snapshot taken (\(live.width)x\(live.height)) — this is what unfolds on wake")
+            }
+        }
     }
 
     // MARK: - Sound
 
     private func trackClearSound(fold: Double) {
-        let engaged = fold > 0.001
+        let engaged = fold > engageFold
         defer { wasEngaged = engaged }
         guard wasEngaged, !engaged, settings.soundEnabled else { return }
         Chime.playClear()
@@ -259,7 +396,7 @@ final class FoldController {
 
     private func teardown() {
         state = .idle
-        tearDownOverlay()
+        hideOverlay()
         capture.stop()
         latestFrame = nil
         previewFold = 0

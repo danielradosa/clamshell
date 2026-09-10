@@ -75,7 +75,12 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         config.width = display.width * Self.backingScale(for: displayID)
         config.height = display.height * Self.backingScale(for: displayID)
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.colorSpaceName = CGColorSpace.sRGB
+        // Capture in the display's own colour space and render into a layer set
+        // to the same one, so no conversion happens at either end. Capturing
+        // sRGB onto a P3 display makes the overlay a slightly different colour
+        // from the desktop it is covering, which reads as a flash when the
+        // effect starts and ends.
+        config.colorSpaceName = Self.colorSpaceName(for: displayID)
         config.showsCursor = true
         config.capturesAudio = false
         config.queueDepth = 3
@@ -96,11 +101,22 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { try? await stream.stopCapture() }
     }
 
-    private static func backingScale(for displayID: CGDirectDisplayID) -> Int {
-        let screen = NSScreen.screens.first {
+    /// The display's colour space name, falling back to sRGB.
+    static func colorSpaceName(for displayID: CGDirectDisplayID) -> CFString {
+        guard let name = screen(for: displayID)?.colorSpace?.cgColorSpace?.name else {
+            return CGColorSpace.sRGB
+        }
+        return name
+    }
+
+    static func screen(for displayID: CGDirectDisplayID) -> NSScreen? {
+        NSScreen.screens.first {
             ($0.deviceDescription[.init("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
         }
-        return Int(screen?.backingScaleFactor ?? 2)
+    }
+
+    private static func backingScale(for displayID: CGDirectDisplayID) -> Int {
+        Int(screen(for: displayID)?.backingScaleFactor ?? 2)
     }
 
     // MARK: - SCStreamOutput

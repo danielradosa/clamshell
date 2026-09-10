@@ -5,14 +5,26 @@ import QuartzCore
 /// The view that owns the Metal layer and paces rendering off the display.
 final class MetalView: NSView {
 
-    /// Called once per display refresh, just before drawing.
+    /// Called once per display refresh while rendering is enabled.
     var onFrame: ((CAMetalLayer) -> Void)?
 
     private var displayLink: CADisplayLink?
 
+    /// Whether the display link should be running.
+    ///
+    /// The window is created once and kept for the life of the app, so the view
+    /// always has a window and the link would otherwise run continuously. Gating
+    /// it here means a hidden overlay costs nothing.
+    var isRenderingEnabled = false {
+        didSet {
+            guard isRenderingEnabled != oldValue else { return }
+            isRenderingEnabled ? startLoop() : stopLoop()
+        }
+    }
+
     var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
-    init(device: MTLDevice) {
+    init(device: MTLDevice, colorSpace: CGColorSpace?) {
         super.init(frame: .zero)
         wantsLayer = true
         let metal = CAMetalLayer()
@@ -20,19 +32,21 @@ final class MetalView: NSView {
         metal.pixelFormat = .bgra8Unorm
         metal.framebufferOnly = true
         metal.isOpaque = true
-        // Draw edge to edge; the window is already exactly one screen.
         metal.contentsGravity = .resize
+        // Match the display's colour space to the capture's. Leaving this unset
+        // lets the window server colour-manage the overlay differently from the
+        // desktop underneath, so the two do not match and the handover at the
+        // start and end of the effect shows up as a visible pop.
+        metal.colorspace = colorSpace
+        // Present in step with the window server rather than whenever the GPU
+        // finishes, so showing and hiding the window lines up with a real frame.
+        metal.presentsWithTransaction = false
         layer = metal
         layerContentsRedrawPolicy = .duringViewResize
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil { stopLoop() } else { startLoop() }
-    }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
@@ -44,10 +58,20 @@ final class MetalView: NSView {
         updateDrawableSize()
     }
 
-    private func updateDrawableSize() {
+    func updateDrawableSize() {
         let scale = window?.backingScaleFactor ?? 2
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+    }
+
+    /// Renders one frame immediately, outside the display link.
+    ///
+    /// Used to get pixels into the layer *before* the window is shown. Ordering
+    /// an overlay on screen whose layer has never presented anything gives a
+    /// frame or two of black.
+    func drawNow() {
+        updateDrawableSize()
+        onFrame?(metalLayer)
     }
 
     private func startLoop() {
@@ -71,11 +95,14 @@ final class MetalView: NSView {
 }
 
 /// A borderless, click-through window that sits above everything on one screen.
+///
+/// Created once and kept for the life of the app. An earlier version built and
+/// destroyed it on every engagement, which made the effect flicker: the fold
+/// threshold sits where the sensor is noisiest, so the window was repeatedly
+/// torn down and rebuilt as the reading crossed back and forth.
 final class OverlayWindow: NSWindow {
 
     init(screen: NSScreen, device: MTLDevice) {
-        // The screen: variant is a convenience initializer, so go through the
-        // designated one and place the window explicitly afterwards.
         super.init(
             contentRect: screen.frame,
             styleMask: [.borderless],
@@ -101,7 +128,7 @@ final class OverlayWindow: NSWindow {
 
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
-        let view = MetalView(device: device)
+        let view = MetalView(device: device, colorSpace: screen.colorSpace?.cgColorSpace)
         view.frame = CGRect(origin: .zero, size: screen.frame.size)
         view.autoresizingMask = [.width, .height]
         contentView = view
@@ -114,7 +141,18 @@ final class OverlayWindow: NSWindow {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    func present() {
+    /// Draws a frame into the layer, then shows the window. Order matters — the
+    /// other way round shows black until the first frame lands.
+    func show() {
+        guard !isVisible else { return }
+        metalView.isRenderingEnabled = true
+        metalView.drawNow()
         orderFrontRegardless()
+    }
+
+    func hide() {
+        guard isVisible else { return }
+        orderOut(nil)
+        metalView.isRenderingEnabled = false
     }
 }

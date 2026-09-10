@@ -5,11 +5,16 @@ import simd
 
 /// Draws the folded desktop panel into a CAMetalLayer.
 ///
-/// Three passes per frame: blur the captured desktop horizontally into a
-/// half-resolution texture, blur that vertically, then draw the subdivided panel
-/// mesh sampling both the sharp and blurred versions. Half resolution for the
-/// blur is free quality — the result is only ever seen through a mix that is
-/// itself blurry, so the lost detail is invisible.
+/// Per frame: blur the captured desktop into a quarter-resolution texture with
+/// two separable ping-pong passes, then draw the subdivided panel mesh sampling
+/// both the sharp and blurred versions.
+///
+/// Quarter resolution is not a compromise here, it is what makes the blur wide.
+/// A nine-tap kernel reaches about seven texels; at quarter resolution those are
+/// twenty-eight full-resolution pixels, and running the pair twice widens it
+/// again while smoothing the profile toward a real gaussian. A single half-res
+/// pass with the radius cranked up instead produces visible ringing, because
+/// nine taps cannot represent a kernel that wide.
 final class FoldRenderer {
 
     /// Panel subdivision. The bend is smooth as long as the grid is fine enough
@@ -43,6 +48,13 @@ final class FoldRenderer {
     private var blurA: MTLTexture?
     private var blurB: MTLTexture?
     private var blurSize: CGSize = .zero
+
+    /// How far down the blur chain runs. Four gives a wide, smooth blur for the
+    /// cost of a sixteenth of the pixels.
+    private static let blurDownsample: CGFloat = 4
+    /// Separable passes run twice; each pair roughly doubles the effective width
+    /// and pulls the kernel shape closer to a gaussian.
+    private static let blurIterations = 2
 
     init(device: MTLDevice) throws {
         self.device = device
@@ -101,18 +113,46 @@ final class FoldRenderer {
     }
 
     private func ensureBlurTextures(for size: CGSize) {
-        let half = CGSize(width: max(size.width / 2, 1), height: max(size.height / 2, 1))
-        guard half != blurSize || blurA == nil else { return }
-        blurSize = half
+        let scaled = CGSize(
+            width: max(size.width / Self.blurDownsample, 1),
+            height: max(size.height / Self.blurDownsample, 1)
+        )
+        guard scaled != blurSize || blurA == nil else { return }
+        blurSize = scaled
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
-            width: Int(half.width), height: Int(half.height), mipmapped: false
+            width: Int(scaled.width), height: Int(scaled.height), mipmapped: false
         )
         desc.usage = [.renderTarget, .shaderRead]
         desc.storageMode = .private
         blurA = device.makeTexture(descriptor: desc)
         blurB = device.makeTexture(descriptor: desc)
+    }
+
+    /// Copies a texture into a private one this renderer owns, allocating the
+    /// destination if needed. Used to keep a desktop snapshot that outlives the
+    /// capture stream.
+    func copy(_ source: MTLTexture, into existing: MTLTexture?) -> MTLTexture? {
+        var destination = existing
+        if destination == nil
+            || destination?.width != source.width
+            || destination?.height != source.height {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: source.pixelFormat,
+                width: source.width, height: source.height, mipmapped: false
+            )
+            desc.usage = [.shaderRead]
+            desc.storageMode = .private
+            destination = device.makeTexture(descriptor: desc)
+        }
+        guard let destination,
+              let buffer = commandQueue.makeCommandBuffer(),
+              let blit = buffer.makeBlitCommandEncoder() else { return existing }
+        blit.copy(from: source, to: destination)
+        blit.endEncoding()
+        buffer.commit()
+        return destination
     }
 
     /// Renders one frame into a drawable and presents it.
@@ -151,15 +191,24 @@ final class FoldRenderer {
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let foldAmount = Float(min(max(fold, 0), 1))
-        // Blur radius ramps with the square of the fold so the image stays crisp
-        // through the early travel and softens fast at the end.
-        let radius = Float(style.blurRadius) * foldAmount * foldAmount
+        // Ramp the radius with fold^1.4 rather than fold^2. Softening should be
+        // underway well before the lid is half shut — it is the part of the
+        // effect the eye actually tracks, and a square puts almost all of it in
+        // the last third of the travel.
+        let radius = Float(style.blurRadius) * pow(foldAmount, 1.4)
 
-        // Pass 1 and 2: separable blur into blurB.
-        blurPass(commandBuffer: commandBuffer, from: source, to: blurA,
-                 step: SIMD2(1.0 / Float(blurA.width), 0), radius: radius)
-        blurPass(commandBuffer: commandBuffer, from: blurA, to: blurB,
-                 step: SIMD2(0, 1.0 / Float(blurB.height)), radius: radius)
+        // Separable blur, run as ping-pong pairs. Source feeds the first
+        // horizontal pass and downsamples on the way in; every pass after that
+        // reads what the previous one wrote.
+        var blurInput = source
+        for iteration in 0..<Self.blurIterations {
+            blurPass(commandBuffer: commandBuffer, from: blurInput, to: blurA,
+                     step: SIMD2(1.0 / Float(blurA.width), 0), radius: radius)
+            blurPass(commandBuffer: commandBuffer, from: blurA, to: blurB,
+                     step: SIMD2(0, 1.0 / Float(blurB.height)), radius: radius)
+            blurInput = blurB
+            _ = iteration
+        }
 
         // Pass 3: the fold itself.
         let pass = MTLRenderPassDescriptor()
@@ -179,7 +228,10 @@ final class FoldRenderer {
             shadowStrength: Float(style.shadowStrength),
             sheen: Float(style.sheen),
             curvature: Float(style.curvature),
-            blurMix: min(foldAmount * 1.4, 1.0),
+            // Cross-fade to the blurred copy early and finish early, so the
+            // panel is already soft while it still fills enough of the screen
+            // for the softness to be seen.
+            blurMix: min(foldAmount * 2.2, 1.0),
             aspect: Float(size.width / max(size.height, 1))
         )
         encoder.setRenderPipelineState(foldPipeline)

@@ -34,7 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        Task { await establishCapturePermission() }
+        Task {
+            await establishCapturePermission()
+            // --demo plays the sweep on launch, so the effect can be exercised
+            // without touching the lid.
+            if CommandLine.arguments.contains("--demo") {
+                controller?.playDemo()
+            }
+        }
     }
 
     /// Works out whether capture is actually possible, and shows the user
