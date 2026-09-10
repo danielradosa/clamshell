@@ -3,23 +3,7 @@ import Metal
 import QuartzCore
 import simd
 
-/// Draws the folded desktop panel into a CAMetalLayer.
-///
-/// Per frame: blur the captured desktop into a quarter-resolution texture with
-/// two separable ping-pong passes, then draw the subdivided panel mesh sampling
-/// both the sharp and blurred versions.
-///
-/// Quarter resolution is not a compromise here, it is what makes the blur wide.
-/// A nine-tap kernel reaches about seven texels; at quarter resolution those are
-/// twenty-eight full-resolution pixels, and running the pair twice widens it
-/// again while smoothing the profile toward a real gaussian. A single half-res
-/// pass with the radius cranked up instead produces visible ringing, because
-/// nine taps cannot represent a kernel that wide.
 final class FoldRenderer {
-
-    /// Panel subdivision. The bend is smooth as long as the grid is fine enough
-    /// that no single quad spans a visible slice of the curve; 48 is comfortably
-    /// past that on a Retina display and still trivial for the GPU.
     private static let gridResolution = 48
 
     private struct FoldUniforms {
@@ -51,11 +35,7 @@ final class FoldRenderer {
     private var blurB: MTLTexture?
     private var blurSize: CGSize = .zero
 
-    /// How far down the blur chain runs. Four gives a wide, smooth blur for the
-    /// cost of a sixteenth of the pixels.
     private static let blurDownsample: CGFloat = 4
-    /// Separable passes run twice; each pair roughly doubles the effective width
-    /// and pulls the kernel shape closer to a gaussian.
     private static let blurIterations = 2
 
     init(device: MTLDevice) throws {
@@ -71,7 +51,6 @@ final class FoldRenderer {
             desc.fragmentFunction = library.makeFunction(name: fragment)
             desc.colorAttachments[0].pixelFormat = .bgra8Unorm
             if blending {
-                // Premultiplied alpha: the shader already multiplies colour by alpha.
                 desc.colorAttachments[0].isBlendingEnabled = true
                 desc.colorAttachments[0].sourceRGBBlendFactor = .one
                 desc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -92,7 +71,6 @@ final class FoldRenderer {
         gridBuffer = buffer
     }
 
-    /// Builds a triangle list covering [-1, 1] in both axes.
     private static func makeGrid(resolution n: Int) -> [SIMD2<Float>] {
         var vertices: [SIMD2<Float>] = []
         vertices.reserveCapacity(n * n * 6)
@@ -130,8 +108,6 @@ final class FoldRenderer {
         desc.storageMode = .private
         blurA = device.makeTexture(descriptor: desc)
 
-        // The final blur target carries a full mip chain; the levels are what
-        // supply blur width.
         let mipped = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: Int(scaled.width), height: Int(scaled.height), mipmapped: true
@@ -141,9 +117,6 @@ final class FoldRenderer {
         blurB = device.makeTexture(descriptor: mipped)
     }
 
-    /// Copies a texture into a private one this renderer owns, allocating the
-    /// destination if needed. Used to keep a desktop snapshot that outlives the
-    /// capture stream.
     func copy(_ source: MTLTexture, into existing: MTLTexture?) -> MTLTexture? {
         var destination = existing
         if destination == nil
@@ -166,18 +139,12 @@ final class FoldRenderer {
         return destination
     }
 
-    /// Renders one frame into a drawable and presents it.
     func render(source: MTLTexture, fold: Double, style: FoldStyle, drawable: CAMetalDrawable) {
         encode(source: source, fold: fold, style: style, target: drawable.texture) { buffer in
             buffer.present(drawable)
         }
     }
 
-    /// Renders one frame into an arbitrary texture.
-    ///
-    /// Split out from the drawable path so the pipeline can be driven offscreen
-    /// with no window, no display and no screen-recording permission — which is
-    /// the only way to check the fold maths without a human watching a screen.
     func render(source: MTLTexture, fold: Double, style: FoldStyle,
                 into target: MTLTexture, waitForCompletion: Bool = false) {
         encode(source: source, fold: fold, style: style, target: target) { buffer in
@@ -188,12 +155,6 @@ final class FoldRenderer {
         }
     }
 
-    /// - Parameters:
-    ///   - source: the captured desktop.
-    ///   - fold: fold progress, 0...1.
-    ///   - style: look parameters, already scaled by the user's multipliers.
-    ///   - target: where the folded panel is drawn.
-    ///   - finish: runs after encoding, before the shared commit.
     private func encode(source: MTLTexture, fold: Double, style: FoldStyle,
                         target: MTLTexture, finish: (MTLCommandBuffer) -> Void) {
         let size = CGSize(width: target.width, height: target.height)
@@ -202,8 +163,6 @@ final class FoldRenderer {
               let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let foldAmount = Float(min(max(fold, 0), 1))
-        // A light separable prefilter, one texel wide. Its job is only to stop
-        // the mip chain aliasing on the way down; the width comes from the mips.
         blurPass(commandBuffer: commandBuffer, from: source, to: blurA,
                  step: SIMD2(1.0 / Float(blurA.width), 0), radius: 1.0)
         blurPass(commandBuffer: commandBuffer, from: blurA, to: blurB,
@@ -214,22 +173,13 @@ final class FoldRenderer {
             blit.endEncoding()
         }
 
-        // Map the style's reach, expressed in screen pixels, onto a mip level.
-        // The chain starts at a quarter resolution and every level doubles the
-        // blur, so the level is the log of the reach in chain texels.
         let reachInTexels = Float(style.blurRadius) / Float(Self.blurDownsample)
         let maxLOD = log2(max(reachInTexels, 1))
-        // Slightly sub-linear, so softening is clearly underway early rather
-        // than arriving all at once near the end of the travel.
         let lod = maxLOD * pow(foldAmount, 0.85)
 
-        // Pass 3: the fold itself.
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
-        // Clear to opaque black: the overlay hides the real desktop, so whatever
-        // the folded panel does not cover must read as empty space, not as a
-        // window onto the desktop underneath.
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         pass.colorAttachments[0].storeAction = .store
 
@@ -241,9 +191,6 @@ final class FoldRenderer {
             shadowStrength: Float(style.shadowStrength),
             sheen: Float(style.sheen),
             curvature: Float(style.curvature),
-            // Fully crossed over to the blurred copy by a third of the way in.
-            // Past that the radius alone carries the effect, which is what makes
-            // the last stretch go properly soft rather than merely hazy.
             blurMix: min(foldAmount * 3.0, 1.0),
             blurLOD: lod,
             vignette: Float(style.vignette),
@@ -259,9 +206,6 @@ final class FoldRenderer {
         encoder.endEncoding()
 
         finish(commandBuffer)
-        // A drawable path presents inside `finish` and still needs committing;
-        // the offscreen path commits there itself so it can wait. Committing an
-        // already-committed buffer is a no-op guarded by its status.
         if commandBuffer.status == .notEnqueued {
             commandBuffer.commit()
         }

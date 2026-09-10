@@ -2,15 +2,8 @@ import Foundation
 import Combine
 import SwiftUI
 
-/// Bridges the running controller to the settings panel.
-///
-/// While the panel is open it drives the preview from the real sensor, so the
-/// user can move the lid and watch the numbers respond. Turning on scrubbing
-/// switches the controller to a manual angle instead, which is the only way to
-/// judge a style at an angle you cannot comfortably hold the lid at.
 @MainActor
 final class SettingsModel: ObservableObject {
-
     @Published var previewFold: Double = 0
     @Published var liveAngle: Double = 0
 
@@ -29,8 +22,6 @@ final class SettingsModel: ObservableObject {
 
     init(controller: FoldController?) {
         self.controller = controller
-        // Without a sensor there is nothing live to watch, so start in the mode
-        // that actually shows something.
         self.isScrubbing = (controller?.hasSensor ?? false) == false
     }
 
@@ -64,8 +55,6 @@ final class SettingsModel: ObservableObject {
         if isScrubbing {
             controller.setMode(.manual(scrubAngle))
         } else {
-            // Never the looping demo: Settings opening on a sensorless Mac must
-            // not start throwing a fullscreen overlay up on a timer.
             controller.setMode(controller.hasSensor
                                ? .sensor : .manual(AngleSource.restingAngle))
         }

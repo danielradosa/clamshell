@@ -2,15 +2,8 @@ import AppKit
 import SwiftUI
 import ServiceManagement
 
-/// The status item, its menu, and the settings window.
-///
-/// Built on NSStatusItem rather than SwiftUI's MenuBarExtra: an LSUIElement app
-/// that also opens a real window is exactly the case where MenuBarExtra's window
-/// handling is least predictable, and NSStatusItem gives direct control over
-/// activation.
 @MainActor
 final class MenuBarController: NSObject, NSWindowDelegate {
-
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var settingsModel: SettingsModel?
@@ -88,15 +81,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         return menu
     }
 
-    // MARK: - Actions
-
     @objc private func playDemo() {
         controller?.playDemo()
     }
 
-    /// SMAppService registers the bundle by its path, so this only sticks for an
-    /// app in a stable location. Running straight out of the build directory
-    /// registers a path that will not survive a `make clean`.
     @objc private func toggleLaunchAtLogin() {
         let service = SMAppService.mainApp
         do {
@@ -124,8 +112,6 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         refreshStatusAppearance()
     }
 
-    /// Reflected in the menu bar so a missing permission is visible at a glance
-    /// rather than only discoverable by wondering why nothing happens.
     var needsPermission = false {
         didSet { refreshStatusAppearance() }
     }
@@ -169,10 +155,6 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         bringToFront(window)
     }
 
-    /// An LSUIElement app is not in the activation order, so ordering a window
-    /// front is not enough to give it focus. Activating the app first is what
-    /// makes the window actually take key, and it must happen before the
-    /// makeKeyAndOrderFront call rather than after.
     private func bringToFront(_ window: NSWindow) {
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
@@ -198,9 +180,6 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         bringToFront(window)
     }
 
-    /// Called when a re-check finds the grant has appeared. The running process
-    /// still cannot use it — macOS does not extend a new grant to an already
-    /// running app — so the honest move is to say so rather than pretend.
     private func permissionBecameAvailable() {
         controller?.isCaptureAllowed = true
     }

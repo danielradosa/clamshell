@@ -4,13 +4,6 @@ import CoreVideo
 import Metal
 import AppKit
 
-/// One desktop frame, with everything the GPU texture depends on kept alive.
-///
-/// `CVMetalTextureGetTexture` hands back a texture that is only valid while its
-/// `CVMetalTexture` wrapper lives, and the underlying pixel buffer belongs to a
-/// pool that will re-vend and overwrite it once the last reference goes. Holding
-/// a frame past the delegate callback therefore means holding all three, not
-/// just the `MTLTexture`.
 final class CapturedFrame {
     let texture: MTLTexture
     private let cvTexture: CVMetalTexture
@@ -23,21 +16,9 @@ final class CapturedFrame {
     }
 }
 
-/// Streams the live desktop into Metal textures.
-///
-/// The stream deliberately excludes this application from the capture. Without
-/// that, the overlay window would be captured, rendered into the overlay, and
-/// captured again — a feedback tunnel. Excluding by *application* rather than by
-/// window is what makes this robust: the settings window and any future window
-/// are covered automatically, and there is no window-ID bookkeeping to get wrong
-/// when a window is recreated.
 final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
-
-    /// Called on the capture queue each time a new desktop frame arrives.
     var onFrame: ((CapturedFrame) -> Void)?
 
-    /// Called on the main queue if the stream dies, usually because the display
-    /// was reconfigured or permission was revoked.
     var onFailure: ((Error) -> Void)?
 
     private let device: MTLDevice
@@ -52,7 +33,6 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
     }
 
-    /// Starts capturing the display the given window sits on.
     func start(on displayID: CGDirectDisplayID) async throws {
         stop()
 
@@ -64,7 +44,6 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             throw CaptureError.noDisplay
         }
 
-        // Exclude our whole app so the overlay never feeds back into the capture.
         let ourBundleID = Bundle.main.bundleIdentifier
         let ourApps = content.applications.filter { $0.bundleIdentifier == ourBundleID }
         let filter = SCContentFilter(
@@ -75,16 +54,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         config.width = display.width * Self.backingScale(for: displayID)
         config.height = display.height * Self.backingScale(for: displayID)
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        // Capture in the display's own colour space and render into a layer set
-        // to the same one, so no conversion happens at either end. Capturing
-        // sRGB onto a P3 display makes the overlay a slightly different colour
-        // from the desktop it is covering, which reads as a flash when the
-        // effect starts and ends.
         config.colorSpaceName = Self.colorSpaceName(for: displayID)
         config.showsCursor = true
         config.capturesAudio = false
         config.queueDepth = 3
-        // Cap at 120fps; the renderer paces itself off the display link anyway.
         config.minimumFrameInterval = CMTime(value: 1, timescale: 120)
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -101,17 +74,6 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { try? await stream.stopCapture() }
     }
 
-    /// The colour space capture and rendering both use.
-    ///
-    /// It has to be a *named* space, because SCStreamConfiguration is configured
-    /// by name and the overlay's layer has to be given the identical space.
-    /// Built-in Apple displays report an unnamed ICC profile ("Color LCD"), so
-    /// asking the screen for its space yields something that cannot be named and
-    /// cannot be handed to the capture. Taking the profile for the layer and
-    /// quietly falling back to sRGB for the capture is worse than picking one:
-    /// the overlay then renders in a different space from the desktop it is
-    /// covering, and every colour shifts the instant it is taken away — which
-    /// looks exactly like a flash.
     static func colorSpaceName(for displayID: CGDirectDisplayID) -> CFString {
         guard let name = screen(for: displayID)?.colorSpace?.cgColorSpace?.name else {
             return CGColorSpace.sRGB
@@ -119,7 +81,6 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         return name
     }
 
-    /// The same space as an object, for the Metal layer.
     static func colorSpace(for displayID: CGDirectDisplayID) -> CGColorSpace? {
         CGColorSpace(name: colorSpaceName(for: displayID))
     }
@@ -134,15 +95,9 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         Int(screen(for: displayID)?.backingScaleFactor ?? 2)
     }
 
-    // MARK: - SCStreamOutput
-
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sampleBuffer.isValid else { return }
 
-        // ScreenCaptureKit sends frames even when nothing changed; the status
-        // attachment says which ones carry pixels. Both `complete` and `started`
-        // do — `started` is the first frame after the stream comes up, and
-        // dropping it means a completely static desktop may never render at all.
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
            let statusValue = attachments.first?[.status] as? Int,
            let status = SCFrameStatus(rawValue: statusValue),
@@ -169,14 +124,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
               let cvTexture,
               let texture = CVMetalTextureGetTexture(cvTexture) else { return nil }
 
-        // Drops cache entries nothing still references. Frames we are holding
-        // keep their own references, so this cannot pull one out from under us.
         CVMetalTextureCacheFlush(cache, 0)
 
         return CapturedFrame(texture: texture, cvTexture: cvTexture, pixelBuffer: pixelBuffer)
     }
-
-    // MARK: - SCStreamDelegate
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         isRunning = false

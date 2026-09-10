@@ -1,11 +1,3 @@
-// FoldPreview — drives the real FoldRenderer offscreen and writes PNGs.
-//
-// The app's visual output normally requires a display, a window and Screen
-// Recording permission, none of which exist in CI or in a headless shell. This
-// tool feeds a synthetic desktop through the exact same shaders and render
-// passes the app uses, so the fold maths can be checked by looking at files.
-//
-// Build: make preview
 
 import Foundation
 import Metal
@@ -25,9 +17,6 @@ let renderer = try FoldRenderer(device: device)
 let width = 1440
 let height = 900
 
-/// Draws something desktop-shaped: a gradient wallpaper, a menu bar, a dock and
-/// a couple of windows. Detail matters here — a flat colour would hide exactly
-/// the perspective and blur artefacts this tool exists to catch.
 func makeSyntheticDesktop() -> CGImage {
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     let context = CGContext(
@@ -49,7 +38,6 @@ func makeSyntheticDesktop() -> CGImage {
         gradient, start: CGPoint(x: 0, y: height), end: CGPoint(x: width, y: 0), options: []
     )
 
-    // Menu bar.
     context.setFillColor(CGColor(gray: 0.08, alpha: 0.72))
     context.fill(CGRect(x: 0, y: height - 28, width: width, height: 28))
 
@@ -58,7 +46,6 @@ func makeSyntheticDesktop() -> CGImage {
         context.fill(rect)
         context.setFillColor(CGColor(gray: 0.22, alpha: 1))
         context.fill(CGRect(x: rect.minX, y: rect.maxY - 26, width: rect.width, height: 26))
-        // Traffic lights, useful as a fine-detail reference for blur strength.
         for (index, color) in [
             CGColor(red: 1, green: 0.35, blue: 0.32, alpha: 1),
             CGColor(red: 1, green: 0.75, blue: 0.20, alpha: 1),
@@ -68,7 +55,6 @@ func makeSyntheticDesktop() -> CGImage {
             context.fillEllipse(in: CGRect(x: rect.minX + 12 + CGFloat(index) * 18,
                                            y: rect.maxY - 18, width: 11, height: 11))
         }
-        // Text-like rules, so the blur has high-frequency content to chew on.
         context.setFillColor(title)
         for line in 0..<Int((rect.height - 50) / 22) {
             let inset = CGFloat(line % 3) * 30
@@ -82,7 +68,6 @@ func makeSyntheticDesktop() -> CGImage {
     window(CGRect(x: 700, y: 260, width: 620, height: 420),
            title: CGColor(red: 0.45, green: 0.70, blue: 0.95, alpha: 1))
 
-    // Dock.
     context.setFillColor(CGColor(gray: 0.9, alpha: 0.20))
     let dock = CGRect(x: CGFloat(width) / 2 - 260, y: 16, width: 520, height: 64)
     context.fill(dock)
@@ -160,7 +145,6 @@ for style in FoldStyle.all {
     }
 }
 
-// A contact sheet makes the progression readable at a glance.
 let columns = folds.count
 let rows = FoldStyle.all.count
 let cellW = width / 3, cellH = height / 3
@@ -187,7 +171,6 @@ for (rowIndex, style) in FoldStyle.all.enumerated() {
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         )!
         if let cell = cellContext.makeImage() {
-            // Rows run top to bottom; CGContext origin is bottom left.
             let y = (rows - 1 - rowIndex) * cellH
             sheet.draw(cell, in: CGRect(x: columnIndex * cellW, y: y, width: cellW, height: cellH))
         }
@@ -209,14 +192,6 @@ print("Wrote \(written) images to \(outputDirectory.path)")
 print("Rows: \(FoldStyle.all.map(\.name).joined(separator: ", "))")
 print("Columns: fold \(folds.map { String(format: "%.2f", $0) }.joined(separator: ", "))")
 
-
-// ---------------------------------------------------------------------------
-// Throughput check at real Retina resolution.
-//
-// The M2 Air's internal panel is 2560x1664, but the window server renders it
-// from a 3420x2224 backing store, so that is the size the GPU actually pushes.
-// Benchmarking at 1440x900 would flatter the numbers by a factor of six.
-// ---------------------------------------------------------------------------
 let benchWidth = 3420, benchHeight = 2224
 let benchDescriptor = MTLTextureDescriptor.texture2DDescriptor(
     pixelFormat: .bgra8Unorm, width: benchWidth, height: benchHeight, mipmapped: false
@@ -232,7 +207,6 @@ sourceDescriptor.usage = [.shaderRead]
 sourceDescriptor.storageMode = .private
 let benchSource = device.makeTexture(descriptor: sourceDescriptor)!
 
-// Warm up: first frame pays for pipeline and blur-texture allocation.
 for _ in 0..<5 {
     renderer.render(source: benchSource, fold: 0.5, style: .glacier,
                     into: benchTarget, waitForCompletion: true)

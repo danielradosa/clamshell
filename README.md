@@ -24,6 +24,22 @@ window opens by itself, so there is something to look at.
 - Anything else — a desktop Mac, an older MacBook — still runs the app, which
   falls back to a looping demo so you can see and tune the effect.
 
+## Install
+
+Download the DMG from [Releases](https://github.com/danielradosa/clamshell/releases),
+drag Clamshell to Applications, then open it once from the right-click menu:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Clamshell.app
+```
+
+The app is signed, but with a self-signed certificate rather than a paid Apple
+Developer ID, so it is not notarised and Gatekeeper will refuse a plain
+double-click on first run. The command above clears the download quarantine flag.
+Right-click ▸ Open works too. Everything after the first launch is normal.
+
+Grant Screen Recording when asked, then relaunch once.
+
 ## Building
 
 You do **not** need Xcode. The Command Line Tools are enough:
@@ -47,6 +63,7 @@ Screen Recording once when asked, then relaunch. Other targets:
 | Target | What it does |
 | --- | --- |
 | `make setup` | Certificate, build, install, launch — start here |
+| `make dmg` | Build a distributable disk image |
 | `make` | Build and sign into `.dist/Clamshell.app` |
 | `make run` | Build, install and launch |
 | `make diagnose` | Report what the app can actually see |
@@ -209,6 +226,20 @@ It starts on a wake notification, and also on simply seeing the angle come back
 up from shut. Whether a lid close sleeps the whole Mac, only the panel, or
 nothing at all depends on power assertions and attached displays, and the
 matching notification does not always arrive; the angle always does.
+
+**Across sleep.** Closing the lid kills the capture stream, so on wake there is
+nothing to draw and the unfold would be missed entirely. The renderer keeps a
+private copy of the last desktop frame, taken while the lid is closing; the
+desktop does not change during sleep, so it is the correct image rather than a
+stand-in. Because it is a picture of the desktop it is discarded the moment the
+session locks, and an unfold owed by a lid close then replays after unlock
+against a live frame instead.
+
+Sleep also latches the whole state machine. Without that the effect flickers
+several times per close: sleep hides the overlay and drops the state back, but
+the lid is shut so the fold is still at maximum and the next tick turns it
+straight back on — and two sleep notifications arrive, so it happens more than
+once.
 
 **Power.** The capture stream is not left running. It starts when the lid drops
 near the engage angle *or* when the lid starts moving downward faster than 15°/s

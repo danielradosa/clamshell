@@ -35,7 +35,7 @@ CODESIGN_IDENTITY ?= $(shell security find-certificate -c "$(SIGNING_CERT_NAME)"
     >/dev/null 2>&1 && echo "$(SIGNING_CERT_NAME)" || echo "-")
 
 .PHONY: all build bundle sign run install uninstall clean reset-permission debug \
-        setup certificate remove-certificate diagnose
+        setup certificate remove-certificate diagnose dmg
 
 # One command from a fresh clone to a working, permission-stable install.
 setup: certificate install reset-permission
@@ -123,3 +123,16 @@ preview:
 	@swiftc $(SWIFTC_FLAGS) -framework Metal -framework AppKit -framework ImageIO \
 		$(PREVIEW_SOURCES) -o $(BUILD_DIR)/FoldPreview
 	@$(BUILD_DIR)/FoldPreview $(DIST_DIR)/preview
+
+VERSION := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+DMG     := $(DIST_DIR)/$(APP_NAME)-$(VERSION).dmg
+
+dmg: all
+	@rm -rf "$(DIST_DIR)/dmg" "$(DMG)"
+	@mkdir -p "$(DIST_DIR)/dmg"
+	@cp -R "$(APP)" "$(DIST_DIR)/dmg/"
+	@ln -s /Applications "$(DIST_DIR)/dmg/Applications"
+	@hdiutil create -volname "$(APP_NAME)" -srcfolder "$(DIST_DIR)/dmg" \
+		-ov -format UDZO -quiet "$(DMG)"
+	@rm -rf "$(DIST_DIR)/dmg"
+	@echo "Built    $(DMG)  ($$(du -h "$(DMG)" | cut -f1))"

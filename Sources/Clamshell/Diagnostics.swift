@@ -3,14 +3,7 @@ import ScreenCaptureKit
 import CoreGraphics
 import AppKit
 
-/// Answers "why is it asking me for permission again?" from inside the app.
-///
-/// Run with `open -a Clamshell --args --diagnose`, which is the only way to get
-/// a true reading: launching the executable from a terminal makes TCC attribute
-/// the request to the terminal instead of to this bundle, so the answer would be
-/// about the wrong process.
 enum Diagnostics {
-
     static let reportURL = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Logs/Clamshell-diagnostics.txt")
 
@@ -27,9 +20,6 @@ enum Diagnostics {
 
         note("CGPreflightScreenCaptureAccess() : \(CGPreflightScreenCaptureAccess())")
 
-        // The authoritative test. CGPreflight is advisory and is widely reported
-        // to answer false while capture actually works; if ScreenCaptureKit hands
-        // back a display list, permission is real.
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true

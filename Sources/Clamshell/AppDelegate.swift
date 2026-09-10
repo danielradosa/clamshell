@@ -2,7 +2,6 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-
     private var controller: FoldController?
     private var menuBar: MenuBarController?
 
@@ -20,9 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Agent app: no Dock icon, no menu bar of its own. LSUIElement in the
-        // Info.plist covers this too, but setting it here means the app behaves
-        // correctly even when run straight out of the build directory.
         NSApp.setActivationPolicy(.accessory)
 
         do {
@@ -36,21 +32,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             await establishCapturePermission()
-            // --demo plays the sweep on launch, so the effect can be exercised
-            // without touching the lid.
             if CommandLine.arguments.contains("--demo") {
                 controller?.playDemo()
             }
         }
     }
 
-    /// Works out whether capture is actually possible, and shows the user
-    /// something useful either way.
-    ///
-    /// Nothing here blocks. An earlier version put up a modal alert on every
-    /// launch where the permission looked missing, driven by a check that was
-    /// not reliable — so the alert appeared even for users who had granted the
-    /// permission, every single time they opened the app.
     private func establishCapturePermission() async {
         let defaults = UserDefaults.standard
         let state = await ScreenPermission.check()
@@ -59,8 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .granted:
             controller?.isCaptureAllowed = true
             menuBar?.needsPermission = false
-            // Give a first-time user something to look at. Without this the app
-            // launches into a single menu bar icon and looks like it did nothing.
             if !defaults.bool(forKey: Key.hasLaunchedBefore) {
                 defaults.set(true, forKey: Key.hasLaunchedBefore)
                 menuBar?.openSettings()
@@ -69,15 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .denied, .unavailable:
             menuBar?.needsPermission = true
 
-            // The system prompt only ever appears once per app, so fire it on
-            // the first run and rely on the setup window from then on.
             if !defaults.bool(forKey: Key.hasRequestedCapture) {
                 defaults.set(true, forKey: Key.hasRequestedCapture)
                 ScreenPermission.requestFromSystem()
             }
-            // Deliberately not marking this as a completed first launch. The
-            // user has not seen the app work yet, so the first launch that
-            // actually has permission should still open Settings for them.
             menuBar?.openOnboarding()
         }
     }

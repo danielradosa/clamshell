@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// The settings panel: style presets, intensity sliders and a live preview.
 struct SettingsView: View {
-
     @ObservedObject private var settings = Settings.shared
     @ObservedObject var model: SettingsModel
 
@@ -16,8 +14,6 @@ struct SettingsView: View {
         .onAppear { model.beginPreview() }
         .onDisappear { model.endPreview() }
     }
-
-    // MARK: - Preview
 
     private var preview: some View {
         VStack(spacing: 14) {
@@ -49,8 +45,6 @@ struct SettingsView: View {
         }
         .frame(width: 240)
     }
-
-    // MARK: - Controls
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -113,6 +107,11 @@ struct SettingsView: View {
                 .toggleStyle(.checkbox)
 
             Spacer()
+
+            HStack {
+                Spacer()
+                Button("Reset to Defaults") { settings.resetToDefaults() }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -130,9 +129,6 @@ struct SettingsView: View {
     }
 }
 
-/// A small, cheap approximation of the real effect, drawn with SwiftUI rather
-/// than Metal. It exists to make the sliders legible while adjusting them; the
-/// real thing runs on the GPU over the live desktop.
 struct LidPreview: View {
     let fold: Double
     let style: FoldStyle

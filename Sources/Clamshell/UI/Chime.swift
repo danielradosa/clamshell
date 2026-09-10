@@ -1,13 +1,6 @@
 import AppKit
 
-/// The soft click played when the lid opens far enough to clear the effect.
-///
-/// Uses a stock system sound rather than a bundled audio file. A SwiftPM
-/// executable has no asset catalog and `Bundle.module` needs a resource bundle
-/// copied next to the binary; leaning on a sound macOS already ships sidesteps
-/// both and keeps the app a single self-contained executable.
 enum Chime {
-
     private static let sound: NSSound? = {
         let candidates = ["Tink", "Pop", "Morse"]
         for name in candidates {

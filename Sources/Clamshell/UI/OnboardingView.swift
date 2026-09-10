@@ -1,13 +1,6 @@
 import SwiftUI
 
-/// Shown when the app cannot capture the screen.
-///
-/// Deliberately a window rather than a modal alert. The previous version put up
-/// a blocking alert on every launch where the permission check failed, which is
-/// exactly the behaviour that makes an app feel broken — especially when the
-/// check itself was unreliable.
 struct OnboardingView: View {
-
     @ObservedObject var model: OnboardingModel
 
     var body: some View {
@@ -79,11 +72,9 @@ struct OnboardingView: View {
 
 @MainActor
 final class OnboardingModel: ObservableObject {
-
     @Published private(set) var state: ScreenPermission.State = .denied
     @Published private(set) var isChecking = false
 
-    /// Called when a check finds the permission has appeared.
     var onGranted: (() -> Void)?
 
     var statusLine: String {
