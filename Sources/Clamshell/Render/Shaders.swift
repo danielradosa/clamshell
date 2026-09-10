@@ -128,10 +128,10 @@ enum Shaders {
         float band = exp(-(sweep * sweep) / 0.02);
         color += band * u.sheen * u.fold * 0.35;
 
-        float2 toEdge = min(in.uv, 1.0 - in.uv);
-        float edge = min(toEdge.x, toEdge.y);
-        float feather = 0.11 * u.fold * mix(0.25, 1.0, levelRamp);
-        float edgeAlpha = smoothstep(0.0, max(feather, 0.0006), edge);
+        float2 fromMiddle = abs(in.uv - 0.5) * 2.0;
+        float shape = pow(pow(fromMiddle.x, 5.0) + pow(fromMiddle.y, 5.0), 0.2);
+        float feather = mix(0.07, 0.34, levelRamp) * clamp(u.fold * 2.2, 0.0, 1.0);
+        float edgeAlpha = 1.0 - smoothstep(1.0 - feather, 1.0 + feather * 0.15, shape);
 
         float alpha = smoothstep(1.0, 0.94, u.fold) * edgeAlpha;
         return float4(color * alpha, alpha);
