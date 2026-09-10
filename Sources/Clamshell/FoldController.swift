@@ -132,7 +132,7 @@ final class FoldController {
         case .armed:
             if angle > engage + armMargin + disarmHysteresis && !closingFast {
                 transition(to: .idle)
-            } else if fold > 0.001 {
+            } else if fold > 0.001, canPresentOverlay {
                 transition(to: .active)
             }
         case .active:
@@ -165,6 +165,13 @@ final class FoldController {
             presentOverlay()
             scheduleWatch(interval: 1.0 / 120.0)
         }
+    }
+
+    /// The overlay is opaque black until its Metal layer has presented a
+    /// drawable, so putting it on screen before the first captured frame lands
+    /// would black out the display for a frame or two. Wait for pixels.
+    private var canPresentOverlay: Bool {
+        latestFrame != nil
     }
 
     private func startCapture() {
@@ -228,9 +235,10 @@ final class FoldController {
 
     private func drawFrame(into layer: CAMetalLayer) {
         guard state == .active, let frame = latestFrame else { return }
-        angleSource.tick()
+        // The angle spring is advanced by the watch timer, which runs at 120 Hz
+        // while active. Ticking it again here would resample it with a fraction
+        // of a frame's dt and skew the closing-velocity estimate.
         let fold = FoldCurve.progress(angle: angleSource.angle, engageAngle: settings.engageAngle)
-        previewFold = fold
         guard let drawable = layer.nextDrawable() else { return }
         renderer.render(source: frame.texture, fold: fold, style: settings.style, drawable: drawable)
     }
